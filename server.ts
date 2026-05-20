@@ -1,22 +1,24 @@
 import express, { Request, Response, NextFunction } from 'express';
-import { createServer as createViteServer } from 'vite';
 import multer from 'multer';
 import { GoogleGenAI } from '@google/genai';
 import sql from 'mssql';
 import path from 'path';
 import crypto from 'crypto';
+import { fileURLToPath } from 'url';
 import 'dotenv/config';
 import { z3950Search } from './src/lib/z3950-client';
 
 /*CONFIG */
 const PORT = Number(process.env.PORT) || 3000;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY1?.trim() ?? '';
-const SQL_CONNECTION_STRING =
-  process.env.SQL_CONNECTION_STRING ??
+const GEMINI_API_KEY = (process.env.GEMINI_API_KEY1 ?? process.env.GEMINI_API_KEY)?.trim() ?? '';
+const DEFAULT_SQL_CONNECTION_STRING =
   'Data Source=localhost;Initial Catalog=librarydb;Persist Security Info=True;User ID=sa;Password=123456;Pooling=False;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=True;Command Timeout=0';
+const SQL_CONNECTION_STRING =
+  process.env.SQL_CONNECTION_STRING?.trim() ||
+  (process.env.VERCEL ? '' : DEFAULT_SQL_CONNECTION_STRING);
 
 if (!GEMINI_API_KEY || GEMINI_API_KEY.includes('your')) {
-  console.error('❌  GEMINI_API_KEY1 chưa được cấu hình trong .env');
+  console.error('❌  GEMINI_API_KEY hoặc GEMINI_API_KEY1 chưa được cấu hình');
 }
 
 /*AI*/
@@ -26,6 +28,7 @@ const ai = GEMINI_API_KEY && !GEMINI_API_KEY.includes('your')
 
 /*DATABASE — schema definitions */
 let pool: sql.ConnectionPool | null = null;
+let dbInitPromise: Promise<void> | null = null;
 
 // Desired full schema for books table
 const BOOKS_REQUIRED_COLUMNS: Record<string, string> = {
@@ -88,7 +91,13 @@ async function ensureColumns(
   }
 }
 
-async function initDb(): Promise<void> {
+export async function initDb(): Promise<void> {
+  if (pool?.connected) return;
+  if (!SQL_CONNECTION_STRING) {
+    console.error('❌  SQL_CONNECTION_STRING chưa được cấu hình. Trên Vercel cần dùng SQL Server/Azure SQL public, không dùng localhost.');
+    return;
+  }
+
   try {
     pool = await sql.connect(SQL_CONNECTION_STRING);
     console.log('SQL Server connected → librarydb');
@@ -132,14 +141,37 @@ async function initDb(): Promise<void> {
   }
 }
 
+export async function ensureDbInitialized(): Promise<void> {
+  if (pool?.connected) return;
+
+  if (!dbInitPromise) {
+    dbInitPromise = initDb().finally(() => {
+      if (!pool?.connected) dbInitPromise = null;
+    });
+  }
+
+  await dbInitPromise;
+}
+
 /*EXPRESS APP*/
-const app = express();
+export const app = express();
 app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
+function needsDatabase(pathname: string): boolean {
+  return pathname.startsWith('/api/auth') || pathname.startsWith('/api/books');
+}
+
+app.use(async (req: Request, _res: Response, next: NextFunction) => {
+  if (needsDatabase(req.path)) {
+    await ensureDbInitialized();
+  }
+  next();
+});
+
 /*HELPERS */
 function requireDb(res: Response): boolean {
-  if (!pool) { res.status(503).json({ error: 'Chưa kết nối CSDL SQL Server' }); return false; }
+  if (!pool?.connected) { res.status(503).json({ error: 'Chưa kết nối CSDL SQL Server' }); return false; }
   return true;
 }
 function requireAi(res: Response): boolean {
@@ -716,10 +748,11 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 /*STARTUP*/
-async function startServer(): Promise<void> {
+export async function startServer(): Promise<void> {
   await initDb();
 
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
     app.use(vite.middlewares);
   } else {
@@ -741,4 +774,10 @@ async function startServer(): Promise<void> {
   });
 }
 
-startServer();
+function isMainModule(): boolean {
+  return Boolean(process.argv[1]) && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+}
+
+if (isMainModule()) {
+  startServer();
+}
