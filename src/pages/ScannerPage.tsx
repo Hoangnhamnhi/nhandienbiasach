@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { UploadCloud, BookOpen, Save, Loader2, X, Edit2, Eye, CheckCircle } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { ExtractedData } from '../App';
+import { saveLocalBook } from '../lib/demo-books';
 
 export default function ScannerPage() {
   const [files, setFiles] = useState<File[]>([]);
@@ -84,27 +85,29 @@ export default function ScannerPage() {
     if (!extractedData) return;
     setIsSaving(true);
     try {
+      const payload = {
+        title: extractedData.title,
+        author: extractedData.author,
+        year: extractedData.year ? parseInt(extractedData.year, 10) : null,
+        publisher: extractedData.publisher,
+        isbn: extractedData.isbn,
+        ddc: extractedData.ddc,
+        language: extractedData.language,
+        physical: extractedData.physical,
+        pageCount: extractedData.pageCount,
+        dimensions: extractedData.dimensions,
+        summary: extractedData.summary,
+        subjects: extractedData.subjects,
+        rawOcrText: extractedData.rawOcrText,
+      };
       const res = await fetch('/api/books', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: extractedData.title,
-          author: extractedData.author,
-          year: extractedData.year ? parseInt(extractedData.year, 10) : null,
-          publisher: extractedData.publisher,
-          isbn: extractedData.isbn,
-          ddc: extractedData.ddc,
-          language: extractedData.language,
-          physical: extractedData.physical,
-          pageCount: extractedData.pageCount,
-          dimensions: extractedData.dimensions,
-          summary: extractedData.summary,
-          subjects: extractedData.subjects,
-          rawOcrText: extractedData.rawOcrText,
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error('Lỗi khi lưu sách');
       const data = await res.json();
+      saveLocalBook(payload, data.id);
       setSavedId(data.id);
       setEditMode(false);
     } catch (err: any) {
@@ -369,4 +372,3 @@ export default function ScannerPage() {
     </div>
   );
 }
-

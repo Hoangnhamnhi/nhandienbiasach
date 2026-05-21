@@ -6,6 +6,7 @@ import {
   Layers, Info, RefreshCw, Pencil, Save,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { saveLocalBook } from '../lib/demo-books';
 
 /*Types*/
 interface Library {
@@ -461,6 +462,8 @@ function RecordCard({ record }: { record: MarcRecord }) {
         }),
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      saveLocalBook({ ...edited, rawOcrText: edited.rawMarc }, data.id);
       setImportStatus('success');
       setShowModal(false);
     } catch (e) {

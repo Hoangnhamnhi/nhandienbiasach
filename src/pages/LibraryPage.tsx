@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BookOpen, RefreshCw, Search, X, ChevronDown, ChevronUp, Hash, Calendar, Building2, Tag, FileText, List, Globe, Ruler, BookMarked, Trash2 } from 'lucide-react';
 import { SavedBook } from '../App';
+import { deleteLocalBook, getLocalBooks, mergeWithLocalBooks } from '../lib/demo-books';
 
 function normalize(raw: any): SavedBook {
   if (!raw) return raw;
@@ -49,6 +50,7 @@ function BookCard({ book: raw, onDelete }: { book: any; onDelete: (id: number) =
   const handleDelete = async () => {
     if (!confirmDel) { setConfirmDel(true); return; }
     setDeleting(true);
+    onDelete(book.id);
     try {
       const res = await fetch(`/api/books/${book.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Lỗi xóa');
@@ -242,7 +244,7 @@ export default function LibraryPage() {
     try {
       const res  = await fetch('/api/books');
       const data = await res.json();
-      setAllBooks(Array.isArray(data) ? data : []);
+      setAllBooks(mergeWithLocalBooks(Array.isArray(data) ? data : []));
     } catch {
       setError('Không thể tải danh sách sách.');
     } finally {
@@ -251,6 +253,7 @@ export default function LibraryPage() {
   };
 
   const handleDelete = (id: number) => {
+    deleteLocalBook(id);
     setAllBooks(prev => prev.filter((b: any) => b.id !== id && b.Id !== id));
   };
 
