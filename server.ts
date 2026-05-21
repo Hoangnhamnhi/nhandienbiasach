@@ -11,6 +11,7 @@ import { z3950Search } from './src/lib/z3950-client';
 /*CONFIG */
 const PORT = Number(process.env.PORT) || 3000;
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY1 ?? process.env.GEMINI_API_KEY)?.trim() ?? '';
+const DEMO_MODE = process.env.DEMO_MODE === 'true';
 const DEFAULT_SQL_CONNECTION_STRING =
   'Data Source=localhost;Initial Catalog=librarydb;Persist Security Info=True;User ID=sa;Password=123456;Pooling=False;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=True;Command Timeout=0';
 const SQL_CONNECTION_STRING =
@@ -92,6 +93,10 @@ async function ensureColumns(
 }
 
 export async function initDb(): Promise<void> {
+  if (DEMO_MODE) {
+    console.log('DEMO_MODE=true: SQL Server connection skipped.');
+    return;
+  }
   if (pool?.connected) return;
   if (!SQL_CONNECTION_STRING) {
     console.error('❌  SQL_CONNECTION_STRING chưa được cấu hình. Trên Vercel cần dùng SQL Server/Azure SQL public, không dùng localhost.');
@@ -142,6 +147,7 @@ export async function initDb(): Promise<void> {
 }
 
 export async function ensureDbInitialized(): Promise<void> {
+  if (DEMO_MODE) return;
   if (pool?.connected) return;
 
   if (!dbInitPromise) {
@@ -159,6 +165,7 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
 function needsDatabase(pathname: string): boolean {
+  if (DEMO_MODE) return false;
   return pathname.startsWith('/api/auth') || pathname.startsWith('/api/books');
 }
 
@@ -171,6 +178,7 @@ app.use(async (req: Request, _res: Response, next: NextFunction) => {
 
 /*HELPERS */
 function requireDb(res: Response): boolean {
+  if (DEMO_MODE) return true;
   if (!pool?.connected) { res.status(503).json({ error: 'Chưa kết nối CSDL SQL Server' }); return false; }
   return true;
 }
@@ -182,6 +190,25 @@ function requireAi(res: Response): boolean {
 function hashPassword(plain: string): string {
   return crypto.createHash('sha256').update(plain + 'lib_salt_2024').digest('hex');
 }
+
+interface DemoUser {
+  id: number;
+  username: string;
+  email: string;
+  password: string;
+}
+
+let demoUserId = 1;
+let demoBookId = 1;
+const demoUsers: DemoUser[] = [
+  {
+    id: demoUserId++,
+    username: 'demo',
+    email: 'demo@example.com',
+    password: hashPassword('demo123'),
+  },
+];
+const demoBooks: any[] = [];
 
 function extractJson(raw: string): string {
   const s = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -232,6 +259,27 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Mật khẩu phải có ít nhất 6 ký tự' });
   }
 
+  if (DEMO_MODE) {
+    const cleanUsername = username.trim();
+    const cleanEmail = email.trim();
+    const exists = demoUsers.some(
+      user => user.username === cleanUsername || user.email === cleanEmail
+    );
+
+    if (exists) {
+      return res.status(409).json({ error: 'Email hoac ten dang nhap da ton tai' });
+    }
+
+    const user = {
+      id: demoUserId++,
+      username: cleanUsername,
+      email: cleanEmail,
+      password: hashPassword(password),
+    };
+    demoUsers.push(user);
+    return res.status(201).json({ id: user.id, username: user.username, email: user.email });
+  }
+
   try {
     // Check duplicate
     const exists = await pool!.request()
@@ -268,6 +316,20 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
   if (!username?.trim() || !password?.trim()) {
     return res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu' });
+  }
+
+  if (DEMO_MODE) {
+    const cleanUsername = username.trim();
+    const hashedPassword = hashPassword(password);
+    const user = demoUsers.find(
+      item => item.username === cleanUsername && item.password === hashedPassword
+    );
+
+    if (!user) {
+      return res.status(401).json({ error: 'Ten dang nhap hoac mat khau khong dung' });
+    }
+
+    return res.json({ id: user.id, username: user.username, email: user.email });
   }
 
   try {
@@ -340,6 +402,10 @@ app.post('/api/extract', upload.array('images', 10), async (req: Request, res: R
 // GET /api/books
 app.get('/api/books', async (_req: Request, res: Response) => {
   if (!requireDb(res)) return;
+  if (DEMO_MODE) {
+    return res.json([...demoBooks].sort((a, b) => b.id - a.id));
+  }
+
   try {
     const { recordset } = await pool!.request().query('SELECT * FROM books ORDER BY id DESC');
     res.json(recordset);
@@ -360,6 +426,28 @@ app.post('/api/books', async (req: Request, res: Response) => {
   } = req.body;
 
   const subjectsStr = Array.isArray(subjects) ? subjects.join('; ') : (subjects ?? '');
+
+  if (DEMO_MODE) {
+    const book = {
+      id: demoBookId++,
+      title: title || 'Khong ro',
+      author: author || '',
+      publishYear: year ? Number(year) : null,
+      isbn: isbn || '',
+      ddc: ddc || '',
+      publisher: publisher || '',
+      language: language || '',
+      physical: physical || '',
+      pageCount: pageCount || '',
+      dimensions: dimensions || '',
+      summary: summary || '',
+      toc: toc || '',
+      subjects: subjectsStr,
+      rawMarc: rawOcrText || '',
+    };
+    demoBooks.push(book);
+    return res.status(201).json({ id: book.id, title: book.title, author: book.author });
+  }
 
   try {
     const result = await pool!.request()
@@ -400,6 +488,13 @@ app.delete('/api/books/:id', async (req: Request, res: Response) => {
   if (!requireDb(res)) return;
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) return res.status(400).json({ error: 'ID không hợp lệ' });
+  if (DEMO_MODE) {
+    const index = demoBooks.findIndex(book => book.id === id);
+    if (index === -1) return res.status(404).json({ error: 'Khong tim thay sach' });
+    demoBooks.splice(index, 1);
+    return res.json({ success: true, id });
+  }
+
   try {
     const result = await pool!.request()
       .input('id', sql.Int, id)
@@ -749,7 +844,9 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 
 /*STARTUP*/
 export async function startServer(): Promise<void> {
-  await initDb();
+  if (!DEMO_MODE) {
+    await initDb();
+  }
 
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');

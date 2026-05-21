@@ -9,7 +9,10 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "db:up": "docker compose --env-file .env.docker.example up -d db db-init",
+    "db:down": "docker compose --env-file .env.docker.example down",
+    "db:logs": "docker compose --env-file .env.docker.example logs -f db"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

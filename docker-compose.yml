@@ -1,0 +1,36 @@
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: nhandienbiasach-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-NhandienBiasach_12345!}"
+    ports:
+      - "${MSSQL_HOST_PORT:-14333}:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+
+  db-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      - db
+    environment:
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-NhandienBiasach_12345!}"
+    volumes:
+      - ./docker/mssql/init.sql:/init.sql:ro
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - |
+        set -e
+        SQLCMD="/opt/mssql-tools18/bin/sqlcmd"
+        if [ ! -x "$$SQLCMD" ]; then SQLCMD="/opt/mssql-tools/bin/sqlcmd"; fi
+        until "$$SQLCMD" -S db -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "SELECT 1" >/dev/null 2>&1; do
+          echo "Waiting for SQL Server..."
+          sleep 2
+        done
+        "$$SQLCMD" -S db -U sa -P "$$MSSQL_SA_PASSWORD" -C -i /init.sql
+
+volumes:
+  sqlserver-data:
