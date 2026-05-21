@@ -6,7 +6,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import 'dotenv/config';
-import { z3950Search } from './src/lib/z3950-client';
+import { z3950Search } from './src/lib/z3950-client.js';
 
 /*CONFIG */
 const PORT = Number(process.env.PORT) || 3000;
