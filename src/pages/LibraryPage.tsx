@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { BookOpen, RefreshCw, Search, X, ChevronDown, ChevronUp, Hash, Calendar, Building2, Tag, FileText, List, Globe, Ruler, BookMarked, Trash2 } from 'lucide-react';
+import { BookOpen, RefreshCw, Search, X, ChevronDown, ChevronUp, Hash, Calendar, Building2, Tag, Globe, Ruler, BookMarked, Trash2, Download } from 'lucide-react';
 import { SavedBook } from '../App';
-import { deleteLocalBook, getLocalBooks, mergeWithLocalBooks } from '../lib/demo-books';
+import { deleteLocalBook, mergeWithLocalBooks } from '../lib/demo-books';
+import { exportBooksToExcel } from '../lib/export-books';
 
 function normalize(raw: any): SavedBook {
   if (!raw) return raw;
@@ -9,7 +10,7 @@ function normalize(raw: any): SavedBook {
   for (const key of Object.keys(raw)) {
     out[key.charAt(0).toLowerCase() + key.slice(1)] = raw[key];
   }
-  // Alias một số trường SQL Server hay trả khác tên
+  // Alias một số trường API hay trả khác tên
   if (out.publishyear !== undefined && out.publishYear === undefined) out.publishYear = out.publishyear;
   if (out.pagecount   !== undefined && out.pageCount   === undefined) out.pageCount   = out.pagecount;
   return out as SavedBook;
@@ -188,13 +189,20 @@ function BookCard({ book: raw, onDelete }: { book: any; onDelete: (id: number) =
               MARC21 Fields
             </div>
             <MarcField tag="245" label="Nhan đề"         value={book.title} />
+            <MarcField tag="245" label="Phụ đề"          value={book.subtitle} />
             <MarcField tag="100" label="Tác giả"         value={book.author} />
             <MarcField tag="020" label="ISBN"            value={book.isbn} />
+            <MarcField tag="020" label="ISBN-13"         value={book.isbn13} />
+            <MarcField tag="020" label="ISBN-10"         value={book.isbn10} />
             <MarcField tag="041" label="Ngôn ngữ"        value={book.language} />
             <MarcField tag="082" label="DDC"             value={book.ddc} />
             <MarcField tag="260" label="Năm xuất bản"    value={book.publishYear?.toString()} />
+            <MarcField tag="260" label="Ngày xuất bản"   value={book.publishedDate} />
             <MarcField tag="260" label="Nhà xuất bản"    value={book.publisher} />
             <MarcField tag="300" label="Mô tả vật lý"    value={[book.pageCount ? book.pageCount + ' trang' : '', book.dimensions].filter(Boolean).join('; ')} />
+            <MarcField tag="500" label="Google Books ID" value={book.googleBooksId} />
+            <MarcField tag="500" label="Danh mục chính"  value={book.mainCategory} />
+            <MarcField tag="856" label="Link Google Books" value={book.infoLink || book.canonicalVolumeLink || book.previewLink} />
             {subjectsArr.length > 0 && (
               <div className="flex gap-2 text-xs">
                 <span className="font-mono font-bold text-blue-600 w-8 flex-shrink-0">650</span>
@@ -257,6 +265,15 @@ export default function LibraryPage() {
     setAllBooks(prev => prev.filter((b: any) => b.id !== id && b.Id !== id));
   };
 
+  const handleExportExcel = () => {
+    try {
+      setError('');
+      exportBooksToExcel(allBooks);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Không thể xuất file Excel.');
+    }
+  };
+
   const filtered = allBooks.filter(raw => {
     const b = normalize(raw);
     const q = search.toLowerCase();
@@ -276,14 +293,14 @@ export default function LibraryPage() {
         <div>
           <h2 className="text-xl font-bold text-neutral-900 flex items-center gap-2">
             <BookMarked className="w-5 h-5 text-blue-600" />
-            Sách trong CSDL
+            Sách trong thư viện
           </h2>
           <p className="text-sm text-neutral-500 mt-0.5">
             {allBooks.length} bản ghi — hiển thị theo chuẩn MARC21
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
           {/* Tìm kiếm */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
@@ -300,6 +317,17 @@ export default function LibraryPage() {
               </button>
             )}
           </div>
+
+          {/* Export Excel */}
+          <button
+            onClick={handleExportExcel}
+            disabled={loading || allBooks.length === 0}
+            title="Xuất tất cả bản ghi trong thư viện ra file Excel"
+            className="flex items-center gap-1.5 px-3 py-2 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl hover:bg-emerald-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Xuất Excel
+          </button>
 
           {/* Refresh */}
           <button
@@ -346,7 +374,7 @@ export default function LibraryPage() {
         <div className="bg-white border border-neutral-200 rounded-2xl p-16 text-center">
           <BookOpen className="w-12 h-12 text-neutral-200 mx-auto mb-4" />
           <p className="text-neutral-500 font-medium">
-            {search ? `Không tìm thấy kết quả cho "${search}"` : 'Chưa có sách nào trong CSDL'}
+            {search ? `Không tìm thấy kết quả cho "${search}"` : 'Chưa có sách nào trong thư viện'}
           </p>
           {search && (
             <button onClick={() => setSearch('')} className="mt-3 text-sm text-blue-600 hover:underline">

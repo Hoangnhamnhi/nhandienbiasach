@@ -357,7 +357,7 @@ export async function z3950Search(opts: SearchOptions): Promise<MarcRecord[]> {
 
       while (buf.length >= 2) {
         let idx = 0;
-        idx++; // skip outer tag byte
+        idx++; 
         if (idx >= buf.length) break;
 
         let pduLen: number;

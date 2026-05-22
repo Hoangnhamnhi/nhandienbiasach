@@ -27,9 +27,13 @@ export interface ExtractedData {
 export interface SavedBook {
   id: number;
   title: string;
+  subtitle?: string;
   author: string;
   publishYear: number | null;
+  publishedDate?: string;
   isbn?: string;
+  isbn10?: string;
+  isbn13?: string;
   ddc?: string;
   publisher?: string;
   language?: string;
@@ -37,8 +41,18 @@ export interface SavedBook {
   pageCount?: string;
   dimensions?: string;
   summary?: string;
+  searchSnippet?: string;
   toc?: string;
   subjects?: string;
+  mainCategory?: string;
+  googleBooksId?: string;
+  previewLink?: string;
+  infoLink?: string;
+  canonicalVolumeLink?: string;
+  printType?: string;
+  saleability?: string;
+  accessViewStatus?: string;
+  viewability?: string;
 }
 
 interface LoggedInUser {

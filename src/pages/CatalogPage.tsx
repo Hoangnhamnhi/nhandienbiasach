@@ -3,7 +3,7 @@ import {
   Search, Download, CheckCircle, AlertCircle, Loader2,
   BookOpen, Globe, Database, ChevronDown, ChevronUp, X,
   BookMarked, Hash, Calendar, Building2, Tag, FileText,
-  Layers, Info, RefreshCw, Pencil, Save,
+  Layers, Info, RefreshCw, Pencil, Save, ExternalLink,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { saveLocalBook } from '../lib/demo-books';
@@ -23,9 +23,13 @@ interface Library {
 interface MarcRecord {
   id: string;
   title: string;
+  subtitle?: string;
   author: string;
   year: string;
+  publishedDate?: string;
   isbn: string;
+  isbn10?: string;
+  isbn13?: string;
   publisher: string;
   ddc: string;
   language: string;
@@ -33,7 +37,28 @@ interface MarcRecord {
   pageCount: string;
   dimensions: string;
   summary: string;
+  searchSnippet?: string;
   subjects: string[];
+  mainCategory?: string;
+  googleBooksId?: string;
+  selfLink?: string;
+  previewLink?: string;
+  infoLink?: string;
+  canonicalVolumeLink?: string;
+  thumbnail?: string;
+  printType?: string;
+  averageRating?: string;
+  ratingsCount?: string;
+  maturityRating?: string;
+  contentVersion?: string;
+  saleability?: string;
+  isEbook?: string;
+  country?: string;
+  viewability?: string;
+  accessViewStatus?: string;
+  embeddable?: string;
+  publicDomain?: string;
+  webReaderLink?: string;
   rawMarc: string;
   source: string;
 }
@@ -56,10 +81,10 @@ const LIBRARIES: Library[] = [
   {
     id: 'loc',
     name: 'Thư viện Quốc hội Mỹ',
-    host: 'z3950.loc.gov',
-    port: 7090,
-    database: 'voyager',
-    description: 'Library of Congress — SRU / MARCXML',
+    host: 'lx2.loc.gov',
+    port: 210,
+    database: 'lcdb',
+    description: 'Library of Congress — LCDB/Folio SRU',
     flag: '🇺🇸',
     searchMode: 'loc-sru',
   },
@@ -84,6 +109,21 @@ function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string;
       <span className="text-neutral-500 flex-shrink-0 min-w-[72px]">{label}:</span>
       <span className="text-neutral-800 break-words leading-relaxed">{value}</span>
     </div>
+  );
+}
+
+function LinkRow({ label, href }: { label: string; href?: string | null }) {
+  if (!href) return null;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 hover:underline"
+    >
+      <ExternalLink className="w-3 h-3" />
+      {label}
+    </a>
   );
 }
 
@@ -277,7 +317,7 @@ function EditImportModal({ record, onClose, onSave, saving }: EditImportModalPro
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-neutral-100">
@@ -293,33 +333,32 @@ function EditImportModal({ record, onClose, onSave, saving }: EditImportModalPro
         {/* Body */}
         <div className="overflow-y-auto p-5 space-y-3 flex-1">
           <Field label="Nhan đề (245)" field="title" />
+          <Field label="Phụ đề" field="subtitle" />
           <Field label="Tác giả (100)" field="author" />
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Năm xuất bản" field="year" />
+          <Field label="Năm xuất bản" field="year" />
 
-            {/* ISBN (020) — validate checksum */}
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-neutral-500">ISBN (020)</label>
-              <input
-                type="text"
-                value={draft.isbn ?? ''}
-                onChange={e => set('isbn', e.target.value)}
-                placeholder="vd: 9786041234567"
-                className={cn(
-                  'px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 bg-neutral-50',
-                  triedSave && !isbn.ok
-                    ? 'border-red-400 focus:ring-red-400'
-                    : isbn.ok && draft.isbn
-                      ? 'border-emerald-400 focus:ring-emerald-400'
-                      : 'border-neutral-200 focus:ring-blue-500'
-                )}
-              />
-              {draft.isbn && (
-                <p className={cn('text-xs mt-0.5', isbn.ok ? 'text-emerald-600' : 'text-red-500')}>
-                  {isbn.msg}
-                </p>
+          {/* ISBN (020) — validate checksum */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-neutral-500">ISBN (020)</label>
+            <input
+              type="text"
+              value={draft.isbn ?? ''}
+              onChange={e => set('isbn', e.target.value)}
+              placeholder="vd: 9786041234567"
+              className={cn(
+                'px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 bg-neutral-50',
+                triedSave && !isbn.ok
+                  ? 'border-red-400 focus:ring-red-400'
+                  : isbn.ok && draft.isbn
+                    ? 'border-emerald-400 focus:ring-emerald-400'
+                    : 'border-neutral-200 focus:ring-blue-500'
               )}
-            </div>
+            />
+            {draft.isbn && (
+              <p className={cn('text-xs mt-0.5', isbn.ok ? 'text-emerald-600' : 'text-red-500')}>
+                {isbn.msg}
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -457,8 +496,33 @@ function RecordCard({ record }: { record: MarcRecord }) {
           pageCount:  edited.pageCount  || '',
           dimensions: edited.dimensions || '',
           summary:    edited.summary    || '',
+          searchSnippet: edited.searchSnippet || '',
           subjects:   edited.subjects   || [],
           rawOcrText: edited.rawMarc    || '',
+          subtitle: edited.subtitle || '',
+          publishedDate: edited.publishedDate || '',
+          isbn10: edited.isbn10 || '',
+          isbn13: edited.isbn13 || '',
+          mainCategory: edited.mainCategory || '',
+          googleBooksId: edited.googleBooksId || '',
+          selfLink: edited.selfLink || '',
+          previewLink: edited.previewLink || '',
+          infoLink: edited.infoLink || '',
+          canonicalVolumeLink: edited.canonicalVolumeLink || '',
+          thumbnail: edited.thumbnail || '',
+          printType: edited.printType || '',
+          averageRating: edited.averageRating || '',
+          ratingsCount: edited.ratingsCount || '',
+          maturityRating: edited.maturityRating || '',
+          contentVersion: edited.contentVersion || '',
+          saleability: edited.saleability || '',
+          isEbook: edited.isEbook || '',
+          country: edited.country || '',
+          viewability: edited.viewability || '',
+          accessViewStatus: edited.accessViewStatus || '',
+          embeddable: edited.embeddable || '',
+          publicDomain: edited.publicDomain || '',
+          webReaderLink: edited.webReaderLink || '',
         }),
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -489,15 +553,38 @@ function RecordCard({ record }: { record: MarcRecord }) {
 
       <div className="p-4">
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center flex-shrink-0 mt-0.5">
-              <BookOpen className="w-4 h-4" />
+          <div className="flex items-start gap-4 min-w-0">
+            <div className="w-20 h-28 rounded-md bg-neutral-100 border border-neutral-200 overflow-hidden flex items-center justify-center flex-shrink-0">
+              {record.thumbnail ? (
+                <img
+                  src={record.thumbnail}
+                  alt={record.title ? `Bìa ${record.title}` : 'Bìa sách'}
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                />
+              ) : (
+                <BookOpen className="w-6 h-6 text-neutral-300" />
+              )}
             </div>
             <div className="min-w-0">
-              <h3 className="font-semibold text-neutral-900 leading-snug text-sm">
+              <h3 className="font-semibold text-neutral-900 leading-snug text-base">
                 {record.title || <span className="italic text-neutral-400">Không có tiêu đề</span>}
               </h3>
-              {record.author && <p className="text-xs text-neutral-500 mt-0.5">{record.author}</p>}
+              {record.subtitle && <p className="text-xs text-neutral-500 mt-0.5">{record.subtitle}</p>}
+              {(record.author || record.year) && (
+                <p className="text-sm text-neutral-500 mt-1">
+                  {[record.author, record.year].filter(Boolean).join(' · ')}
+                </p>
+              )}
+              {(record.searchSnippet || record.summary) && (
+                <p className="text-xs text-neutral-600 mt-2 leading-relaxed line-clamp-3">
+                  {record.searchSnippet || record.summary}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-3 mt-2">
+                <LinkRow label="Google Sách" href={record.infoLink || record.canonicalVolumeLink} />
+                <LinkRow label="Xem trước" href={record.previewLink} />
+              </div>
             </div>
           </div>
           <div className="flex-shrink-0">
@@ -539,7 +626,11 @@ function RecordCard({ record }: { record: MarcRecord }) {
         {expanded && (
           <div className="mt-3 pt-3 border-t border-neutral-100 space-y-1.5">
             <InfoRow icon={<Building2 className="w-3 h-3" />} label="Nhà xuất bản" value={record.publisher} />
+            <InfoRow icon={<Calendar className="w-3 h-3" />} label="Ngày XB" value={record.publishedDate || record.year} />
+            <InfoRow icon={<Hash className="w-3 h-3" />} label="ISBN-10" value={record.isbn10} />
             <InfoRow icon={<BookMarked className="w-3 h-3" />} label="Mô tả vật lý" value={[record.pageCount ? record.pageCount + ' trang' : '', record.dimensions].filter(Boolean).join('; ')} />
+            <InfoRow icon={<Tag className="w-3 h-3" />} label="Danh mục" value={record.mainCategory} />
+            <InfoRow icon={<Info className="w-3 h-3" />} label="Truy cập" value={[record.printType, record.saleability, record.accessViewStatus, record.viewability].filter(Boolean).join(' • ')} />
             {record.summary && (
               <div className="mt-2 p-2.5 bg-neutral-50 rounded-lg text-xs text-neutral-600 leading-relaxed">
                 <span className="font-medium text-neutral-700">Tóm tắt: </span>{record.summary}
@@ -554,6 +645,11 @@ function RecordCard({ record }: { record: MarcRecord }) {
                 ))}
               </div>
             )}
+            <div className="flex flex-wrap gap-3 mt-2">
+              <LinkRow label="Thông tin Google Books" href={record.infoLink || record.canonicalVolumeLink} />
+              <LinkRow label="Xem trước" href={record.previewLink} />
+              <LinkRow label="Đọc trên web" href={record.webReaderLink} />
+            </div>
             <div className="mt-2 text-xs text-neutral-400 font-mono truncate">Nguồn: {record.source}</div>
           </div>
         )}
@@ -649,7 +745,7 @@ export default function CatalogPage({ blocked = false }: { blocked?: boolean }) 
               Biên mục từ Thư viện Quốc tế
             </h2>
             <p className="text-blue-200 text-sm mt-1">
-              Tìm kiếm &amp; import bản ghi MARC21 • Z39.50 / ISO 23950
+              Tìm kiếm &amp; import bản ghi MARC21 • Google Books / Z39.50
             </p>
           </div>
           {results !== null && (
@@ -752,7 +848,7 @@ export default function CatalogPage({ blocked = false }: { blocked?: boolean }) 
             Đang kết nối tới <b>{selectedLibrary.name}</b>...
           </p>
           <p className="text-neutral-400 text-xs mt-1">
-            Z39.50 • {selectedLibrary.host}:{selectedLibrary.port} • Có thể mất 10–20 giây
+            {selectedLibrary.searchMode === 'nlv' ? 'Google Books API' : `LOC SRU • ${selectedLibrary.host}:${selectedLibrary.port}/${selectedLibrary.database}`} • Có thể mất 10–30 giây
           </p>
         </div>
       )}
@@ -769,6 +865,12 @@ export default function CatalogPage({ blocked = false }: { blocked?: boolean }) 
                 <ul className="mt-2 text-xs text-red-500 space-y-0.5 list-disc list-inside">
                   <li>Server NLV đôi khi không ổn định — thử lại sau vài giây</li>
                   <li>Dùng từ khóa ngắn, không dấu nếu vẫn lỗi (vd: "van hoc viet nam")</li>
+                </ul>
+              )}
+              {selectedLibrary.id === 'loc' && (
+                <ul className="mt-2 text-xs text-red-500 space-y-0.5 list-disc list-inside">
+                  <li>Dịch vụ LOC SRU đôi khi timeout hoặc trả 502 khi tải cao.</li>
+                  <li>Thử tìm bằng ISBN, nhan đề tiếng Anh ngắn hơn, hoặc quay lại Google Books cho sách tiếng Việt.</li>
                 </ul>
               )}
               <button onClick={handleSearch} className="mt-3 flex items-center gap-1.5 text-xs text-red-600 hover:text-red-800 font-medium">

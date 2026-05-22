@@ -27,6 +27,7 @@ export function mergeWithLocalBooks(apiBooks: any[]): any[] {
 
 export function saveLocalBook(input: any, id?: number): any {
   const book = {
+    ...input,
     id: id ?? Date.now(),
     title: input.title || 'Khong ro',
     author: input.author || '',
