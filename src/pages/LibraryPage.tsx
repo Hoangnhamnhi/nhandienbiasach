@@ -262,7 +262,7 @@ function BookCard({ book: raw, onDelete }: { book: any; onDelete: (id: number) =
             <MappedMarcField tag="260" label="Nhà xuất bản"    value={book.publisher} />
             <MappedMarcField tag="300" label="Mô tả vật lý"    value={book.physical || [book.pageCount ? book.pageCount + ' trang' : '', book.dimensions].filter(Boolean).join('; ')} />
             <MappedMarcField tag="500" label="Danh mục chính"  value={book.mainCategory} />
-            <MappedMarcField tag="856" label="Link Google Books" value={book.infoLink || book.canonicalVolumeLink || book.previewLink} />
+            <MappedMarcField tag="856" label="Link nguồn" value={book.infoLink || book.canonicalVolumeLink} />
             {subjectsArr.length > 0 && (
               <div className="flex gap-2 text-xs">
                 <span className="font-mono font-bold text-blue-600 w-8 flex-shrink-0">650</span>
