@@ -3,49 +3,6 @@
 import * as net from 'net';
 
 /*Vietnamese text helpers*/
-function toAsciiQuery(str: string): string {
-  const map: Record<string, string> = {
-    à:'a',á:'a',â:'a',ã:'a',ä:'a',å:'a',
-    è:'e',é:'e',ê:'e',ë:'e',
-    ì:'i',í:'i',î:'i',ï:'i',
-    ò:'o',ó:'o',ô:'o',õ:'o',ö:'o',
-    ù:'u',ú:'u',û:'u',ü:'u',
-    ý:'y',ÿ:'y',
-    ă:'a',ắ:'a',ằ:'a',ẳ:'a',ẵ:'a',ặ:'a',
-    đ:'d',
-    ế:'e',ề:'e',ể:'e',ễ:'e',ệ:'e',
-    ị:'i',
-    ơ:'o',ớ:'o',ờ:'o',ở:'o',ỡ:'o',ợ:'o',
-    ố:'o',ồ:'o',ổ:'o',ỗ:'o',ộ:'o',
-    ụ:'u',ư:'u',ứ:'u',ừ:'u',ử:'u',ữ:'u',ự:'u',
-    ỳ:'y',ỷ:'y',ỹ:'y',ỵ:'y',
-    ả:'a',ạ:'a',
-    ẻ:'e',ẽ:'e',ẹ:'e',
-    ỉ:'i',ĩ:'i',
-    ỏ:'o',ọ:'o',
-    ủ:'u',ũ:'u',
-    // uppercase
-    À:'A',Á:'A',Â:'A',Ã:'A',Ä:'A',Å:'A',
-    È:'E',É:'E',Ê:'E',Ë:'E',
-    Ì:'I',Í:'I',Î:'I',Ï:'I',
-    Ò:'O',Ó:'O',Ô:'O',Õ:'O',Ö:'O',
-    Ù:'U',Ú:'U',Û:'U',Ü:'U',
-    Ý:'Y',Đ:'D',
-    Ă:'A',Ắ:'A',Ằ:'A',Ẳ:'A',Ẵ:'A',Ặ:'A',
-    Ế:'E',Ề:'E',Ể:'E',Ễ:'E',Ệ:'E',
-    Ị:'I',
-    Ơ:'O',Ớ:'O',Ờ:'O',Ở:'O',Ỡ:'O',Ợ:'O',
-    Ố:'O',Ồ:'O',Ổ:'O',Ỗ:'O',Ộ:'O',
-    Ụ:'U',Ư:'U',Ứ:'U',Ừ:'U',Ử:'U',Ữ:'U',Ự:'U',
-  };
-  return str
-    .split('')
-    .map(c => map[c] ?? c)
-    .join('')
-    .replace(/[^\x20-\x7E]/g, '') // strip non-ASCII còn lại
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 function decodeMarc8(buf: Buffer): string {
   // Thử UTF-8 trước (NLV Koha thường lưu UTF-8)
   const utf8 = buf.toString('utf8');
@@ -81,125 +38,117 @@ function berInt(n: number): Buffer {
   return Buffer.from(bytes);
 }
 
-function berOctet(s: string): Buffer { return Buffer.from(s, 'latin1'); }
-function berBool(b: boolean): Buffer { return Buffer.from([b ? 0xff : 0x00]); }
-
 /*Z39.50 PDU Builders*/
 
-/** INIT Request */
-function buildInitRequest(): Buffer {
-  const refId       = berTLV([0x02], berInt(1));
-  const protVer     = Buffer.from([0xa0, 0x07, 0x80, 0x05, 0x50, 0x00, 0x00, 0x04, 0x00]);
-  const options     = Buffer.from([0xa1, 0x07, 0x80, 0x05, 0xf6, 0xc0, 0x00, 0x00, 0x00]);
-  const prefMsgSize = berTLV([0x02], berInt(1048576));
-  const maxRecSize  = berTLV([0x06], berInt(1048576));
-  const implId      = berTLV([0x61], berTLV([0x04], Buffer.from('81')));
-  const implName    = berTLV([0x62], Buffer.from('LibraryScanner'));
-  const implVer     = berTLV([0x63], Buffer.from('1.0'));
-  const body = Buffer.concat([refId, protVer, options, prefMsgSize, maxRecSize, implId, implName, implVer]);
-  return berTLV([0x30], berTLV([0xa0], body));
+const Z3950_BIB1_OID = Buffer.from([0x2a, 0x86, 0x48, 0xce, 0x13, 0x03, 0x01]);
+const Z3950_USMARC_OID = Buffer.from([0x2a, 0x86, 0x48, 0xce, 0x13, 0x05, 0x0a]);
+const Z3950_RESULT_SET = '1';
+const Z3950_UTF8_NEGOTIATION = Buffer.from(
+  'bf814920301ea41c06072a8648ce130f03a011a10fa10aa208820628d316010008830101',
+  'hex',
+);
+
+function normalizeZ3950Query(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\u0111/g, 'd')
+    .replace(/\u0110/g, 'D')
+    .replace(/[^\x20-\x7e]/g, '')
+    .replace(/[^\w\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-/**
- * Search Request — dùng @attr 4=6 (word-list AND) cho NLV
- *
- * NLV Zebra chỉ hỗ trợ:
- *   @attr 4=6  = word-list (AND các từ) ← dùng cái này
- *   @attr 4=1  = phrase (exact phrase)  ← NLV không hỗ trợ tốt
- *
- * Query phải là ASCII (bỏ dấu) vì NLV MARC-8 không nhận UTF-8.
- */
-function buildSearchRequest(
-  database: string,
-  useAttr: number,
-  queryStr: string,
-  refId: number = 2,
-): Buffer {
-  // BIB-1 attribute set OID: 1.2.840.10003.3.1
-  const BIB1_OID = Buffer.from([0x2a, 0x86, 0x48, 0xce, 0x13, 0x03, 0x01]);
-  // USMARC OID: 1.2.840.10003.5.10
-  const USMARC_OID = Buffer.from([0x2a, 0x86, 0x48, 0xce, 0x13, 0x05, 0x0a]);
+function z3950Terms(useAttr: number, query: string): string[] {
+  if (useAttr === 7) {
+    const isbn = query.replace(/[^0-9Xx]/g, '').toUpperCase();
+    return [isbn || normalizeZ3950Query(query)];
+  }
 
-  // Bỏ dấu tiếng Việt → ASCII trước khi gửi
-  const asciiQuery = toAsciiQuery(queryStr);
+  const normalized = normalizeZ3950Query(query);
+  const tokens = normalized.split(' ').filter(Boolean);
+  return tokens.length > 1 ? tokens.slice(0, 8) : [normalized];
+}
 
-  // Attribute 1 (Use): useAttr value
+function buildZ3950InitRequest(): Buffer {
+  const body = Buffer.concat([
+    berTLV([0x83], Buffer.from([0x00, 0xe0])),
+    berTLV([0x84], Buffer.from([0x00, 0xe9, 0xa2, 0x40])),
+    berTLV([0x85], berInt(1048576)),
+    berTLV([0x86], berInt(1048576)),
+    berTLV([0x9f, 0x6e], Buffer.from('81')),
+    berTLV([0x9f, 0x6f], Buffer.from('LibraryScanner')),
+    berTLV([0x9f, 0x70], Buffer.from('1.0')),
+    Z3950_UTF8_NEGOTIATION,
+  ]);
+
+  return berTLV([0xb4], body);
+}
+
+function buildZ3950AttributePlusTerm(useAttr: number, termText: string): Buffer {
   const attrUse = berTLV([0x30], Buffer.concat([
-    berTLV([0x02], berInt(1)),       // attributeType = 1
-    berTLV([0x02], berInt(useAttr)),
+    berTLV([0x9f, 0x78], berInt(1)),
+    berTLV([0x9f, 0x79], berInt(useAttr)),
   ]));
-
-  // Attribute 4 (Structure): 6 = word-list
-  const attrStruct = berTLV([0x30], Buffer.concat([
-    berTLV([0x02], berInt(4)),  // attributeType = 4 (Structure)
-    berTLV([0x02], berInt(6)),  // attributeValue = 6 (word-list AND)
-  ]));
-
-  // Attribute 5 (Truncation): 100 = do not truncate (default)
-  // Skip - let server decide
-
-  // AttributeList = SEQUENCE OF AttributeElement
-  const attrList = berTLV([0x30], Buffer.concat([attrUse, attrStruct]));
-
-  // term [2] general OCTET STRING
-  const term = berTLV([0x82], Buffer.from(asciiQuery, 'ascii'));
-
-  // AttributesPlusTerm
-  const apt = berTLV([0x30], Buffer.concat([attrList, term]));
-
-  // Operand [103] constructed = 0xBF 0x67
-  const operand = berTLV([0xbf, 0x67], apt);
-
-  // RPNStructure [1]
-  const rpnStruct = berTLV([0xa1], operand);
-
-  // RPNQuery SEQUENCE { attributeSet OID, rpn RPNStructure }
-  const rpnQuery = berTLV([0x30], Buffer.concat([
-    berTLV([0x06], BIB1_OID),
-    rpnStruct,
-  ]));
-
-  // Query [1] RPNQuery
-  const query = berTLV([0xa1], rpnQuery);
-
-  // databaseNames: SEQUENCE { VisibleString }
-  const dbNames = berTLV([0x30], berTLV([0x1b], Buffer.from(database)));
-
-  // preferredRecordSyntax
-  const prefSyntax = berTLV([0x19], USMARC_OID);
-
-  const body = Buffer.concat([
-    berTLV([0x02], berInt(refId)),         // referenceId
-    berTLV([0x02], berInt(0)),             // smallSetUpperBound
-    berTLV([0x02], berInt(0)),             // largeSetLowerBound
-    berTLV([0x02], berInt(20)),            // mediumSetPresentNumber
-    berTLV([0x01], berBool(true)),         // replaceIndicator
-    berTLV([0x1a], Buffer.from('default')), // resultSetName
-    berTLV([0x30], dbNames),               // databaseNames
-    query,
-    prefSyntax,
-  ]);
-
-  return berTLV([0x30], berTLV([0xa3], body));
+  const attributes = berTLV([0xbf, 0x2c], attrUse);
+  const term = berTLV([0x9f, 0x2d], Buffer.from(termText, 'ascii'));
+  return berTLV([0xbf, 0x66], Buffer.concat([attributes, term]));
 }
 
-/** Present Request */
-function buildPresentRequest(start: number, count: number, refId: number = 3): Buffer {
-  const USMARC_OID = Buffer.from([0x2a, 0x86, 0x48, 0xce, 0x13, 0x05, 0x0a]);
+function buildZ3950Operand(useAttr: number, termText: string): Buffer {
+  return berTLV([0xa0], buildZ3950AttributePlusTerm(useAttr, termText));
+}
+
+function buildZ3950AndRpn(useAttr: number, terms: string[]): Buffer {
+  const [first, ...rest] = terms.length ? terms : [''];
+  return rest.reduce(
+    (left, term) => berTLV([0xa1], Buffer.concat([
+      left,
+      buildZ3950Operand(useAttr, term),
+      berTLV([0xbf, 0x2e], berTLV([0x80], Buffer.alloc(0))),
+    ])),
+    buildZ3950Operand(useAttr, first),
+  );
+}
+
+function buildZ3950SearchRequest(database: string, useAttr: number, queryStr: string): Buffer {
+  const rpnStruct = buildZ3950AndRpn(useAttr, z3950Terms(useAttr, queryStr));
+  const query = berTLV([0xb5], berTLV([0xa1], Buffer.concat([
+    berTLV([0x06], Z3950_BIB1_OID),
+    rpnStruct,
+  ])));
+
   const body = Buffer.concat([
-    berTLV([0x02], berInt(refId)),
-    berTLV([0x1a], Buffer.from('default')),  // resultSetId
-    berTLV([0x06], berInt(start)),           // resultSetStartPoint
-    berTLV([0x07], berInt(count)),           // numberOfRecordsRequested
-    berTLV([0x19], USMARC_OID),              // preferredRecordSyntax
+    berTLV([0x8d], berInt(0)),
+    berTLV([0x8e], berInt(1)),
+    berTLV([0x8f], berInt(0)),
+    berTLV([0x90], Buffer.from([0x01])),
+    berTLV([0x91], Buffer.from(Z3950_RESULT_SET)),
+    berTLV([0xb2], berTLV([0x9f, 0x69], Buffer.from(database, 'ascii'))),
+    query,
   ]);
-  return berTLV([0x30], berTLV([0xa6], body));
+
+  return berTLV([0xb6], body);
+}
+
+function buildZ3950PresentRequest(start: number, count: number): Buffer {
+  const body = Buffer.concat([
+    berTLV([0x9f, 0x1f], Buffer.from(Z3950_RESULT_SET)),
+    berTLV([0x9e], berInt(start)),
+    berTLV([0x9d], berInt(count)),
+    berTLV([0x9f, 0x68], Z3950_USMARC_OID),
+  ]);
+
+  return berTLV([0xb8], body);
 }
 
 /*MARC21 ISO2709 Parser*/
 
 export interface MarcRecord {
   id: string;
+  marcLeader: string;
+  marcFields: MarcField[];
   title: string;
   author: string;
   year: string;
@@ -216,15 +165,60 @@ export interface MarcRecord {
   source: string;
 }
 
+export interface MarcSubfield {
+  code: string;
+  value: string;
+}
+
+export interface MarcField {
+  tag: string;
+  ind1?: string;
+  ind2?: string;
+  value?: string;
+  subfields?: MarcSubfield[];
+  raw: string;
+}
+
 function subfield(content: string, code: string): string {
   const re = new RegExp(`[\x1f$]${code}([^\x1f$\x1e]+)`, 'i');
   const m = re.exec(content);
   return m ? m[1].trim() : '';
 }
 
+function parseMarcField(tag: string, fieldData: string): MarcField {
+  if (/^00\d$/.test(tag)) {
+    return {
+      tag,
+      value: fieldData.replace(/\x1e/g, '').trim(),
+      raw: fieldData.replace(/\x1e/g, ''),
+    };
+  }
+
+  const ind1 = fieldData[0] || ' ';
+  const ind2 = fieldData[1] || ' ';
+  const body = fieldData.slice(2);
+  const subfields = body
+    .split('\x1f')
+    .slice(1)
+    .map(part => ({
+      code: part.charAt(0),
+      value: part.slice(1).replace(/\x1e/g, '').trim(),
+    }))
+    .filter(item => item.code && item.value);
+
+  return {
+    tag,
+    ind1,
+    ind2,
+    subfields,
+    raw: fieldData.replace(/\x1e/g, ''),
+  };
+}
+
 export function parseMarcIso2709(raw: Buffer, index: number, source: string): MarcRecord | null {
   const rec: MarcRecord = {
     id: `z_${Date.now()}_${index}`,
+    marcLeader: '', marcFields: [],
     title: '', author: '', year: '', isbn: '', publisher: '',
     ddc: '', language: '', physical: '', pageCount: '',
     dimensions: '', summary: '', subjects: [], rawMarc: '', source,
@@ -232,15 +226,15 @@ export function parseMarcIso2709(raw: Buffer, index: number, source: string): Ma
 
   try {
     // Dùng decodeMarc8 thay vì latin1 cứng — NLV có thể trả UTF-8
-    const text = decodeMarc8(raw);
-    rec.rawMarc = text;
+    rec.rawMarc = decodeMarc8(raw);
 
-    if (text.length < 24) return null;
+    if (raw.length < 24) return null;
+    rec.marcLeader = raw.toString('ascii', 0, 24);
 
-    const baseAddr = parseInt(text.slice(12, 17), 10);
-    if (isNaN(baseAddr) || baseAddr >= text.length) return null;
+    const baseAddr = parseInt(raw.toString('ascii', 12, 17), 10);
+    if (isNaN(baseAddr) || baseAddr >= raw.length) return null;
 
-    const dir = text.slice(24, baseAddr - 1);
+    const dir = raw.toString('ascii', 24, baseAddr - 1);
     for (let i = 0; i + 12 <= dir.length; i += 12) {
       const tag    = dir.slice(i, i + 3);
       const length = parseInt(dir.slice(i + 3, i + 7), 10);
@@ -248,7 +242,8 @@ export function parseMarcIso2709(raw: Buffer, index: number, source: string): Ma
 
       if (isNaN(length) || isNaN(offset)) continue;
 
-      const fieldData = text.slice(baseAddr + offset, baseAddr + offset + length - 1);
+      const fieldData = decodeMarc8(raw.slice(baseAddr + offset, baseAddr + offset + length - 1));
+      rec.marcFields.push(parseMarcField(tag, fieldData));
 
       switch (tag) {
         case '020': {
@@ -291,7 +286,7 @@ export function parseMarcIso2709(raw: Buffer, index: number, source: string): Ma
         case '520':
           if (!rec.summary) rec.summary = subfield(fieldData, 'a') || fieldData.slice(2).trim();
           break;
-        case '600': case '610': case '650': case '651': {
+        case '600': case '610': case '650': case '651': case '653': {
           const sa = subfield(fieldData, 'a');
           const sx = subfield(fieldData, 'x');
           const subj = [sa, sx].filter(Boolean).join(' -- ');
@@ -329,6 +324,75 @@ interface SearchOptions {
   timeoutMs?: number;
 }
 
+function readBerTagEnd(buffer: Buffer, offset: number): number | null {
+  if (offset >= buffer.length) return null;
+  let cursor = offset + 1;
+  if ((buffer[offset] & 0x1f) === 0x1f) {
+    while (true) {
+      if (cursor >= buffer.length) return null;
+      const byte = buffer[cursor++];
+      if ((byte & 0x80) === 0) break;
+    }
+  }
+  return cursor;
+}
+
+function readBerLength(buffer: Buffer, offset: number): { contentStart: number; length: number | null } | null {
+  if (offset >= buffer.length) return null;
+  const first = buffer[offset];
+  if (first < 0x80) return { contentStart: offset + 1, length: first };
+  if (first === 0x80) return { contentStart: offset + 1, length: null };
+
+  const byteCount = first & 0x7f;
+  if (byteCount === 0 || byteCount > 4 || offset + 1 + byteCount > buffer.length) return null;
+
+  let length = 0;
+  for (let i = 0; i < byteCount; i++) length = (length << 8) | buffer[offset + 1 + i];
+  return { contentStart: offset + 1 + byteCount, length };
+}
+
+function readBerFrameLength(buffer: Buffer): number | null {
+  const tagEnd = readBerTagEnd(buffer, 0);
+  if (tagEnd === null) return null;
+
+  const rootLength = readBerLength(buffer, tagEnd);
+  if (!rootLength) return null;
+  if (rootLength.length !== null) {
+    const frameEnd = rootLength.contentStart + rootLength.length;
+    return frameEnd <= buffer.length ? frameEnd : null;
+  }
+
+  let cursor = rootLength.contentStart;
+  let openIndefinite = 1;
+
+  while (cursor < buffer.length) {
+    if (cursor + 2 <= buffer.length && buffer[cursor] === 0x00 && buffer[cursor + 1] === 0x00) {
+      cursor += 2;
+      openIndefinite--;
+      if (openIndefinite === 0) return cursor;
+      continue;
+    }
+
+    const itemTagEnd = readBerTagEnd(buffer, cursor);
+    if (itemTagEnd === null) return null;
+
+    const itemLength = readBerLength(buffer, itemTagEnd);
+    if (!itemLength) return null;
+
+    if (itemLength.length === null) {
+      openIndefinite++;
+      cursor = itemLength.contentStart;
+      continue;
+    }
+
+    const itemEnd = itemLength.contentStart + itemLength.length;
+    if (itemEnd > buffer.length) return null;
+    cursor = itemEnd;
+  }
+
+  return null;
+}
+
 export async function z3950Search(opts: SearchOptions): Promise<MarcRecord[]> {
   const { host, port, database, searchType, query, maxResults = 20, timeoutMs = 15000 } = opts;
   const useAttr = USE_ATTRS[searchType] ?? USE_ATTRS.keyword;
@@ -356,22 +420,8 @@ export async function z3950Search(opts: SearchOptions): Promise<MarcRecord[]> {
       buf = Buffer.concat([buf, chunk]);
 
       while (buf.length >= 2) {
-        let idx = 0;
-        idx++; // skip outer tag byte
-        if (idx >= buf.length) break;
-
-        let pduLen: number;
-        const lb = buf[idx];
-        if (lb < 0x80) {
-          pduLen = lb + idx + 1; idx++;
-        } else if (lb === 0x81) {
-          if (buf.length < idx + 2) break;
-          pduLen = buf[idx + 1] + idx + 2; idx += 2;
-        } else if (lb === 0x82) {
-          if (buf.length < idx + 3) break;
-          pduLen = ((buf[idx + 1] << 8) | buf[idx + 2]) + idx + 3; idx += 3;
-        } else break;
-
+        const pduLen = readBerFrameLength(buf);
+        if (pduLen === null) break;
         if (buf.length < pduLen) break;
 
         const pdu = buf.slice(0, pduLen);
@@ -384,7 +434,7 @@ export async function z3950Search(opts: SearchOptions): Promise<MarcRecord[]> {
       try {
         if (phase === 'init') {
           phase = 'search';
-          send(buildSearchRequest(database, useAttr, query));
+          send(buildZ3950SearchRequest(database, useAttr, query));
           return;
         }
 
@@ -395,7 +445,7 @@ export async function z3950Search(opts: SearchOptions): Promise<MarcRecord[]> {
           if (totalHits === 0) { cleanup(); return; }
 
           phase = 'present';
-          send(buildPresentRequest(1, totalHits));
+          send(buildZ3950PresentRequest(1, totalHits));
           return;
         }
 
@@ -412,7 +462,7 @@ export async function z3950Search(opts: SearchOptions): Promise<MarcRecord[]> {
     socket.on('timeout', () => cleanup(new Error(`Hết thời gian kết nối tới ${host}:${port}`)));
     socket.on('error',   (err) => cleanup(new Error(`Lỗi TCP ${host}:${port} — ${err.message}`)));
 
-    socket.connect(port, host, () => { send(buildInitRequest()); });
+    socket.connect(port, host, () => { send(buildZ3950InitRequest()); });
   });
 }
 
@@ -452,7 +502,7 @@ function extractRecords(pdu: Buffer, out: MarcRecord[], source: string): void {
   let idx = 0;
   while (i < pdu.length - 5) {
     const lenStr = pdu.slice(i, i + 5).toString('ascii');
-    const recLen = parseInt(lenStr, 10);
+    const recLen = /^\d{5}$/.test(lenStr) ? parseInt(lenStr, 10) : NaN;
 
     if (!isNaN(recLen) && recLen > 24 && recLen < 100000 && i + recLen <= pdu.length) {
       const marcBuf = pdu.slice(i, i + recLen);

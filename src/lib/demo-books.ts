@@ -27,6 +27,7 @@ export function mergeWithLocalBooks(apiBooks: any[]): any[] {
 
 export function saveLocalBook(input: any, id?: number): any {
   const book = {
+    ...input,
     id: id ?? Date.now(),
     title: input.title || 'Khong ro',
     author: input.author || '',
@@ -42,6 +43,8 @@ export function saveLocalBook(input: any, id?: number): any {
     toc: input.toc || '',
     subjects: Array.isArray(input.subjects) ? input.subjects.join('; ') : (input.subjects || ''),
     rawMarc: input.rawOcrText || input.rawMarc || '',
+    marcLeader: input.marcLeader || '',
+    marcFields: Array.isArray(input.marcFields) ? input.marcFields : [],
   };
   const books = readBooks().filter(item => String(item.id ?? item.Id) !== String(book.id));
   books.push(book);

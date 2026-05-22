@@ -3,7 +3,7 @@ import {
   Search, Download, CheckCircle, AlertCircle, Loader2,
   BookOpen, Globe, Database, ChevronDown, ChevronUp, X,
   BookMarked, Hash, Calendar, Building2, Tag, FileText,
-  Layers, Info, RefreshCw, Pencil, Save,
+  Layers, Info, RefreshCw, Pencil, Save, ExternalLink,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { saveLocalBook } from '../lib/demo-books';
@@ -17,15 +17,35 @@ interface Library {
   database: string;
   description: string;
   flag: string;
-  searchMode: 'z3950' | 'nlv' | 'loc-sru';
+  searchMode: 'z3950' | 'nlv-opac';
+}
+
+interface MarcSubfield {
+  code: string;
+  value: string;
+}
+
+interface MarcField {
+  tag: string;
+  ind1?: string;
+  ind2?: string;
+  value?: string;
+  subfields?: MarcSubfield[];
+  raw: string;
 }
 
 interface MarcRecord {
   id: string;
+  marcLeader?: string;
+  marcFields?: MarcField[];
   title: string;
+  subtitle?: string;
   author: string;
   year: string;
+  publishedDate?: string;
   isbn: string;
+  isbn10?: string;
+  isbn13?: string;
   publisher: string;
   ddc: string;
   language: string;
@@ -33,7 +53,28 @@ interface MarcRecord {
   pageCount: string;
   dimensions: string;
   summary: string;
+  searchSnippet?: string;
   subjects: string[];
+  mainCategory?: string;
+  googleBooksId?: string;
+  selfLink?: string;
+  previewLink?: string;
+  infoLink?: string;
+  canonicalVolumeLink?: string;
+  thumbnail?: string;
+  printType?: string;
+  averageRating?: string;
+  ratingsCount?: string;
+  maturityRating?: string;
+  contentVersion?: string;
+  saleability?: string;
+  isEbook?: string;
+  country?: string;
+  viewability?: string;
+  accessViewStatus?: string;
+  embeddable?: string;
+  publicDomain?: string;
+  webReaderLink?: string;
   rawMarc: string;
   source: string;
 }
@@ -44,24 +85,24 @@ type ImportStatus = 'idle' | 'importing' | 'success' | 'error';
 /*Constants*/
 const LIBRARIES: Library[] = [
   {
-    id: 'nlv',
+    id: 'nlv-opac',
     name: 'Thư viện Quốc gia Việt Nam',
-    host: 'googleapis.com',
+    host: 'opac.nlv.gov.vn',
     port: 443,
-    database: 'google-books',
-    description: 'Sách Việt Nam qua Google Books API',
+    database: 'opac',
+    description: 'Nguồn Thư viện Quốc gia Việt Nam',
     flag: '🇻🇳',
-    searchMode: 'nlv',
+    searchMode: 'nlv-opac',
   },
   {
-    id: 'loc',
-    name: 'Thư viện Quốc hội Mỹ',
-    host: 'z3950.loc.gov',
-    port: 7090,
-    database: 'voyager',
-    description: 'Library of Congress — SRU / MARCXML',
+    id: 'loc-z3950',
+    name: 'Thư viện Quốc hội Mỹ Z39.50',
+    host: 'lx2.loc.gov',
+    port: 210,
+    database: 'LCDB',
+    description: 'Nguồn Thư viện Quốc hội Mỹ',
     flag: '🇺🇸',
-    searchMode: 'loc-sru',
+    searchMode: 'z3950',
   },
 ];
 
@@ -75,6 +116,11 @@ function langLabel(code: string): string {
   return LANG_MAP[code?.toLowerCase()] ?? code ?? '';
 }
 
+function libraryModeLabel(lib: Library): string {
+  if (lib.searchMode === 'nlv-opac') return 'NLV OPAC';
+  return 'Z39.50';
+}
+
 /*Sub-components*/
 function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string; value?: string | null }) {
   if (!value) return null;
@@ -83,6 +129,65 @@ function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string;
       <span className="text-neutral-400 flex-shrink-0 mt-0.5">{icon}</span>
       <span className="text-neutral-500 flex-shrink-0 min-w-[72px]">{label}:</span>
       <span className="text-neutral-800 break-words leading-relaxed">{value}</span>
+    </div>
+  );
+}
+
+function LinkRow({ label, href }: { label: string; href?: string | null }) {
+  if (!href) return null;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 hover:underline"
+    >
+      <ExternalLink className="w-3 h-3" />
+      {label}
+    </a>
+  );
+}
+
+function MarcFieldList({ leader, fields }: { leader?: string; fields?: MarcField[] }) {
+  if (!leader && (!fields || fields.length === 0)) return null;
+
+  return (
+    <div className="mt-3 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[10px] font-mono uppercase tracking-widest text-neutral-400">
+          Tất cả trường MARC21
+        </span>
+        <span className="text-[10px] text-neutral-400">{fields?.length ?? 0} trường</span>
+      </div>
+      {leader && (
+        <div className="grid grid-cols-[44px_1fr] gap-2 text-xs mb-1">
+          <span className="font-mono font-bold text-blue-600">LDR</span>
+          <span className="font-mono text-neutral-700 break-all">{leader}</span>
+        </div>
+      )}
+      <div className="space-y-1.5 max-h-80 overflow-y-auto pr-1">
+        {(fields ?? []).map((field, index) => (
+          <div key={`${field.tag}-${index}`} className="grid grid-cols-[44px_1fr] gap-2 text-xs">
+            <span className="font-mono font-bold text-blue-600">{field.tag}</span>
+            <span className="text-neutral-700 break-words">
+              {field.value ? (
+                <span className="font-mono">{field.value}</span>
+              ) : (
+                <>
+                  <span className="font-mono text-neutral-400 mr-2">
+                    [{field.ind1 || ' '}{field.ind2 || ' '}]
+                  </span>
+                  {(field.subfields ?? []).map((sub, subIndex) => (
+                    <span key={`${sub.code}-${subIndex}`} className="mr-2">
+                      <span className="font-mono text-neutral-500">${sub.code}</span> {sub.value}
+                    </span>
+                  ))}
+                </>
+              )}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -277,7 +382,7 @@ function EditImportModal({ record, onClose, onSave, saving }: EditImportModalPro
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-neutral-100">
@@ -293,33 +398,32 @@ function EditImportModal({ record, onClose, onSave, saving }: EditImportModalPro
         {/* Body */}
         <div className="overflow-y-auto p-5 space-y-3 flex-1">
           <Field label="Nhan đề (245)" field="title" />
+          <Field label="Phụ đề" field="subtitle" />
           <Field label="Tác giả (100)" field="author" />
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Năm xuất bản" field="year" />
+          <Field label="Năm xuất bản" field="year" />
 
-            {/* ISBN (020) — validate checksum */}
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-neutral-500">ISBN (020)</label>
-              <input
-                type="text"
-                value={draft.isbn ?? ''}
-                onChange={e => set('isbn', e.target.value)}
-                placeholder="vd: 9786041234567"
-                className={cn(
-                  'px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 bg-neutral-50',
-                  triedSave && !isbn.ok
-                    ? 'border-red-400 focus:ring-red-400'
-                    : isbn.ok && draft.isbn
-                      ? 'border-emerald-400 focus:ring-emerald-400'
-                      : 'border-neutral-200 focus:ring-blue-500'
-                )}
-              />
-              {draft.isbn && (
-                <p className={cn('text-xs mt-0.5', isbn.ok ? 'text-emerald-600' : 'text-red-500')}>
-                  {isbn.msg}
-                </p>
+          {/* ISBN (020) — validate checksum */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-neutral-500">ISBN (020)</label>
+            <input
+              type="text"
+              value={draft.isbn ?? ''}
+              onChange={e => set('isbn', e.target.value)}
+              placeholder="vd: 9786041234567"
+              className={cn(
+                'px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 bg-neutral-50',
+                triedSave && !isbn.ok
+                  ? 'border-red-400 focus:ring-red-400'
+                  : isbn.ok && draft.isbn
+                    ? 'border-emerald-400 focus:ring-emerald-400'
+                    : 'border-neutral-200 focus:ring-blue-500'
               )}
-            </div>
+            />
+            {draft.isbn && (
+              <p className={cn('text-xs mt-0.5', isbn.ok ? 'text-emerald-600' : 'text-red-500')}>
+                {isbn.msg}
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -457,8 +561,33 @@ function RecordCard({ record }: { record: MarcRecord }) {
           pageCount:  edited.pageCount  || '',
           dimensions: edited.dimensions || '',
           summary:    edited.summary    || '',
+          searchSnippet: edited.searchSnippet || '',
           subjects:   edited.subjects   || [],
           rawOcrText: edited.rawMarc    || '',
+          rawMarc: edited.rawMarc || '',
+          marcLeader: edited.marcLeader || '',
+          marcFields: edited.marcFields || [],
+          subtitle: edited.subtitle || '',
+          isbn10: edited.isbn10 || '',
+          mainCategory: edited.mainCategory || '',
+          selfLink: edited.selfLink || '',
+          previewLink: edited.previewLink || '',
+          infoLink: edited.infoLink || '',
+          canonicalVolumeLink: edited.canonicalVolumeLink || '',
+          thumbnail: edited.thumbnail || '',
+          printType: edited.printType || '',
+          averageRating: edited.averageRating || '',
+          ratingsCount: edited.ratingsCount || '',
+          maturityRating: edited.maturityRating || '',
+          contentVersion: edited.contentVersion || '',
+          saleability: edited.saleability || '',
+          isEbook: edited.isEbook || '',
+          country: edited.country || '',
+          viewability: edited.viewability || '',
+          accessViewStatus: edited.accessViewStatus || '',
+          embeddable: edited.embeddable || '',
+          publicDomain: edited.publicDomain || '',
+          webReaderLink: edited.webReaderLink || '',
         }),
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -475,6 +604,7 @@ function RecordCard({ record }: { record: MarcRecord }) {
   };
 
   const subjects = record.subjects ?? [];
+  const primaryLinkLabel = record.source?.includes('Google') ? 'Google Sách' : 'Thông tin nguồn';
 
   return (
     <>
@@ -489,15 +619,38 @@ function RecordCard({ record }: { record: MarcRecord }) {
 
       <div className="p-4">
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center flex-shrink-0 mt-0.5">
-              <BookOpen className="w-4 h-4" />
+          <div className="flex items-start gap-4 min-w-0">
+            <div className="w-20 h-28 rounded-md bg-neutral-100 border border-neutral-200 overflow-hidden flex items-center justify-center flex-shrink-0">
+              {record.thumbnail ? (
+                <img
+                  src={record.thumbnail}
+                  alt={record.title ? `Bìa ${record.title}` : 'Bìa sách'}
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                />
+              ) : (
+                <BookOpen className="w-6 h-6 text-neutral-300" />
+              )}
             </div>
             <div className="min-w-0">
-              <h3 className="font-semibold text-neutral-900 leading-snug text-sm">
+              <h3 className="font-semibold text-neutral-900 leading-snug text-base">
                 {record.title || <span className="italic text-neutral-400">Không có tiêu đề</span>}
               </h3>
-              {record.author && <p className="text-xs text-neutral-500 mt-0.5">{record.author}</p>}
+              {record.subtitle && <p className="text-xs text-neutral-500 mt-0.5">{record.subtitle}</p>}
+              {(record.author || record.year) && (
+                <p className="text-sm text-neutral-500 mt-1">
+                  {[record.author, record.year].filter(Boolean).join(' · ')}
+                </p>
+              )}
+              {(record.searchSnippet || record.summary) && (
+                <p className="text-xs text-neutral-600 mt-2 leading-relaxed line-clamp-3">
+                  {record.searchSnippet || record.summary}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-3 mt-2">
+                <LinkRow label={primaryLinkLabel} href={record.infoLink || record.canonicalVolumeLink} />
+                <LinkRow label="Xem trước" href={record.previewLink} />
+              </div>
             </div>
           </div>
           <div className="flex-shrink-0">
@@ -526,6 +679,11 @@ function RecordCard({ record }: { record: MarcRecord }) {
               <Globe className="w-3 h-3" />{langLabel(record.language)}
             </span>
           )}
+          {(record.marcFields?.length ?? 0) > 0 && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-50 text-emerald-700 border border-emerald-100">
+              <Database className="w-3 h-3" />MARC21 {record.marcFields?.length} trường
+            </span>
+          )}
         </div>
 
         <button
@@ -539,7 +697,11 @@ function RecordCard({ record }: { record: MarcRecord }) {
         {expanded && (
           <div className="mt-3 pt-3 border-t border-neutral-100 space-y-1.5">
             <InfoRow icon={<Building2 className="w-3 h-3" />} label="Nhà xuất bản" value={record.publisher} />
+            <InfoRow icon={<Calendar className="w-3 h-3" />} label="Năm XB" value={record.year} />
+            <InfoRow icon={<Hash className="w-3 h-3" />} label="ISBN-10" value={record.isbn10} />
             <InfoRow icon={<BookMarked className="w-3 h-3" />} label="Mô tả vật lý" value={[record.pageCount ? record.pageCount + ' trang' : '', record.dimensions].filter(Boolean).join('; ')} />
+            <InfoRow icon={<Tag className="w-3 h-3" />} label="Danh mục" value={record.mainCategory} />
+            <InfoRow icon={<Info className="w-3 h-3" />} label="Truy cập" value={[record.printType, record.saleability, record.accessViewStatus, record.viewability].filter(Boolean).join(' • ')} />
             {record.summary && (
               <div className="mt-2 p-2.5 bg-neutral-50 rounded-lg text-xs text-neutral-600 leading-relaxed">
                 <span className="font-medium text-neutral-700">Tóm tắt: </span>{record.summary}
@@ -554,6 +716,12 @@ function RecordCard({ record }: { record: MarcRecord }) {
                 ))}
               </div>
             )}
+            <div className="flex flex-wrap gap-3 mt-2">
+              <LinkRow label={primaryLinkLabel} href={record.infoLink || record.canonicalVolumeLink} />
+              <LinkRow label="Xem trước" href={record.previewLink} />
+              <LinkRow label="Đọc trên web" href={record.webReaderLink} />
+            </div>
+            <MarcFieldList leader={record.marcLeader} fields={record.marcFields} />
             <div className="mt-2 text-xs text-neutral-400 font-mono truncate">Nguồn: {record.source}</div>
           </div>
         )}
@@ -597,10 +765,8 @@ export default function CatalogPage({ blocked = false }: { blocked?: boolean }) 
     try {
       let url: string;
 
-      if (selectedLibrary.searchMode === 'nlv') {
-        url = `/api/catalog/search-nlv?searchType=${encodeURIComponent(searchType)}&query=${encodeURIComponent(q)}`;
-      } else if (selectedLibrary.searchMode === 'loc-sru') {
-        url = `/api/catalog/search-loc?searchType=${encodeURIComponent(searchType)}&query=${encodeURIComponent(q)}`;
+      if (selectedLibrary.searchMode === 'nlv-opac') {
+        url = `/api/catalog/search-nlv-opac?searchType=${encodeURIComponent(searchType)}&query=${encodeURIComponent(q)}`;
       } else {
         url = `/api/catalog/search?host=${encodeURIComponent(selectedLibrary.host)}&port=${selectedLibrary.port}&database=${encodeURIComponent(selectedLibrary.database)}&searchType=${encodeURIComponent(searchType)}&query=${encodeURIComponent(q)}`;
       }
@@ -649,7 +815,7 @@ export default function CatalogPage({ blocked = false }: { blocked?: boolean }) 
               Biên mục từ Thư viện Quốc tế
             </h2>
             <p className="text-blue-200 text-sm mt-1">
-              Tìm kiếm &amp; import bản ghi MARC21 • Z39.50 / ISO 23950
+              Tìm kiếm &amp; import bản ghi MARC21 • NLV OPAC / Z39.50
             </p>
           </div>
           {results !== null && (
@@ -660,7 +826,7 @@ export default function CatalogPage({ blocked = false }: { blocked?: boolean }) 
           )}
         </div>
 
-        <div className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
           {LIBRARIES.map(lib => (
             <button
               key={lib.id}
@@ -735,12 +901,6 @@ export default function CatalogPage({ blocked = false }: { blocked?: boolean }) 
             <Database className="w-3.5 h-3.5" />
             <b className="text-neutral-600">{selectedLibrary.name}</b>
           </span>
-          <span className="font-mono">{selectedLibrary.host}:{selectedLibrary.port}/{selectedLibrary.database}</span>
-          {selectedLibrary.id === 'nlv' && (
-            <span className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
-              <Info className="w-3 h-3" />Google Books API — ưu tiên sách tiếng Việt
-            </span>
-          )}
         </div>
       </div>
 
@@ -752,7 +912,7 @@ export default function CatalogPage({ blocked = false }: { blocked?: boolean }) 
             Đang kết nối tới <b>{selectedLibrary.name}</b>...
           </p>
           <p className="text-neutral-400 text-xs mt-1">
-            Z39.50 • {selectedLibrary.host}:{selectedLibrary.port} • Có thể mất 10–20 giây
+            {libraryModeLabel(selectedLibrary)} • {selectedLibrary.host}:{selectedLibrary.port}/{selectedLibrary.database} • Có thể mất 10–30 giây
           </p>
         </div>
       )}
@@ -765,12 +925,6 @@ export default function CatalogPage({ blocked = false }: { blocked?: boolean }) 
             <div>
               <p className="text-sm font-medium text-red-700">Lỗi kết nối</p>
               <p className="text-xs text-red-600 mt-1">{error}</p>
-              {selectedLibrary.id === 'nlv' && (
-                <ul className="mt-2 text-xs text-red-500 space-y-0.5 list-disc list-inside">
-                  <li>Server NLV đôi khi không ổn định — thử lại sau vài giây</li>
-                  <li>Dùng từ khóa ngắn, không dấu nếu vẫn lỗi (vd: "van hoc viet nam")</li>
-                </ul>
-              )}
               <button onClick={handleSearch} className="mt-3 flex items-center gap-1.5 text-xs text-red-600 hover:text-red-800 font-medium">
                 <RefreshCw className="w-3.5 h-3.5" /> Thử lại
               </button>
@@ -785,7 +939,7 @@ export default function CatalogPage({ blocked = false }: { blocked?: boolean }) 
           <BookOpen className="w-10 h-10 text-neutral-300 mx-auto mb-3" />
           <p className="text-neutral-500 text-sm font-medium">Không tìm thấy kết quả</p>
           <p className="text-neutral-400 text-xs mt-1">Thử từ khóa khác hoặc đổi loại tìm kiếm</p>
-          {selectedLibrary.id === 'nlv' && (
+          {selectedLibrary.searchMode === 'nlv-opac' && (
             <p className="text-xs text-amber-600 mt-2 bg-amber-50 rounded-lg px-3 py-2 inline-block">
               Thử tên sách hoặc tác giả tiếng Việt
             </p>
@@ -831,12 +985,12 @@ export default function CatalogPage({ blocked = false }: { blocked?: boolean }) 
             Chọn thư viện bên trên, nhập từ khóa rồi nhấn <b>Tìm kiếm</b>. Kết quả trả về bản ghi
             MARC21 — bạn có thể import trực tiếp vào thư viện của mình.
           </p>
-          <div className="mt-5 grid grid-cols-3 gap-3 max-w-sm mx-auto text-xs text-neutral-500">
+          <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl mx-auto text-xs text-neutral-500">
             {LIBRARIES.map(lib => (
               <div key={lib.id} className="bg-neutral-50 rounded-xl p-3 border border-neutral-100">
                 <div className="text-base mb-1">{lib.flag}</div>
                 <div className="font-medium">{lib.id.toUpperCase()}</div>
-                <div className="text-neutral-400">{lib.searchMode === 'loc-sru' ? 'SRU' : 'Z39.50'}</div>
+                <div className="text-neutral-400">{libraryModeLabel(lib)}</div>
               </div>
             ))}
           </div>

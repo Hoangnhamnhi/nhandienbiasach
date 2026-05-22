@@ -1,6 +1,6 @@
 {
   "name": "BookScanner & Library Manger",
-  "description": "Quét bìa sách để nhận diện tên, tác giả và lưu vào csdl SQL Server.",
+  "description": "",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

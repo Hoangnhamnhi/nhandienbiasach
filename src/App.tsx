@@ -24,12 +24,32 @@ export interface ExtractedData {
   rawOcrText?: string;
 }
 
+export interface MarcSubfield {
+  code: string;
+  value: string;
+}
+
+export interface MarcField {
+  tag: string;
+  ind1?: string;
+  ind2?: string;
+  value?: string;
+  subfields?: MarcSubfield[];
+  raw: string;
+}
+
 export interface SavedBook {
   id: number;
+  marcLeader?: string;
+  marcFields?: MarcField[];
   title: string;
+  subtitle?: string;
   author: string;
   publishYear: number | null;
+  publishedDate?: string;
   isbn?: string;
+  isbn10?: string;
+  isbn13?: string;
   ddc?: string;
   publisher?: string;
   language?: string;
@@ -37,8 +57,18 @@ export interface SavedBook {
   pageCount?: string;
   dimensions?: string;
   summary?: string;
+  searchSnippet?: string;
   toc?: string;
   subjects?: string;
+  mainCategory?: string;
+  googleBooksId?: string;
+  previewLink?: string;
+  infoLink?: string;
+  canonicalVolumeLink?: string;
+  printType?: string;
+  saleability?: string;
+  accessViewStatus?: string;
+  viewability?: string;
 }
 
 interface LoggedInUser {

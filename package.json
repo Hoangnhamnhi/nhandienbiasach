@@ -9,22 +9,17 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit",
-    "db:up": "docker compose --env-file .env.docker.example up -d db db-init",
-    "db:down": "docker compose --env-file .env.docker.example down",
-    "db:logs": "docker compose --env-file .env.docker.example logs -f db"
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
-    "better-sqlite3": "^12.9.0",
     "clsx": "^2.1.1",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
-    "mssql": "^12.5.0",
     "multer": "^2.1.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
@@ -34,9 +29,7 @@
     "vite": "^6.2.3"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^4.17.25",
-    "@types/mssql": "^12.3.0",
     "@types/multer": "^2.1.0",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.14",

@@ -250,7 +250,7 @@ export default function ScannerPage() {
           <div className="h-full flex flex-col items-center justify-center text-neutral-500 text-center py-24">
             <Loader2 className="h-12 w-12 mb-3 text-blue-600 animate-spin" />
             <p className="font-medium animate-pulse">AI đang phân tích ảnh và tự động tìm kiếm...</p>
-            <p className="text-sm mt-2 text-neutral-400">Tiến trình này kết hợp nhận diện hình ảnh và Google Search để lấy đầy đủ chi tiết nhất có thể.</p>
+            <p className="text-sm mt-2 text-neutral-400">Tiến trình này kết hợp nhận diện hình ảnh và Google Search để lấy các thông tin.</p>
           </div>
         )}
 

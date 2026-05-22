@@ -1,22 +1,15 @@
 import express, { Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { GoogleGenAI } from '@google/genai';
-import sql from 'mssql';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import 'dotenv/config';
-import { z3950Search } from './src/lib/z3950-client.js';
+import { parseMarcIso2709, z3950Search, type MarcField, type MarcRecord } from './src/lib/z3950-client.js';
 
 /*CONFIG */
 const PORT = Number(process.env.PORT) || 3000;
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY1 ?? process.env.GEMINI_API_KEY)?.trim() ?? '';
-const DEMO_MODE = process.env.DEMO_MODE === 'true';
-const DEFAULT_SQL_CONNECTION_STRING =
-  'Data Source=localhost;Initial Catalog=librarydb;Persist Security Info=True;User ID=sa;Password=123456;Pooling=False;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=True;Command Timeout=0';
-const SQL_CONNECTION_STRING =
-  process.env.SQL_CONNECTION_STRING?.trim() ||
-  (process.env.VERCEL ? '' : DEFAULT_SQL_CONNECTION_STRING);
 
 if (!GEMINI_API_KEY || GEMINI_API_KEY.includes('your')) {
   console.error('❌  GEMINI_API_KEY hoặc GEMINI_API_KEY1 chưa được cấu hình');
@@ -27,161 +20,12 @@ const ai = GEMINI_API_KEY && !GEMINI_API_KEY.includes('your')
   ? new GoogleGenAI({ apiKey: GEMINI_API_KEY })
   : null;
 
-/*DATABASE — schema definitions */
-let pool: sql.ConnectionPool | null = null;
-let dbInitPromise: Promise<void> | null = null;
-
-// Desired full schema for books table
-const BOOKS_REQUIRED_COLUMNS: Record<string, string> = {
-  title:       'NVARCHAR(255)',
-  author:      'NVARCHAR(255)',
-  publishYear: 'INT',
-  isbn:        'NVARCHAR(50)',
-  ddc:         'NVARCHAR(50)',
-  publisher:   'NVARCHAR(255)',
-  language:    'NVARCHAR(50)',
-  physical:    'NVARCHAR(255)',
-  pageCount:   'NVARCHAR(100)',
-  dimensions:  'NVARCHAR(100)',
-  summary:     'NVARCHAR(MAX)',
-  toc:         'NVARCHAR(MAX)',
-  subjects:    'NVARCHAR(MAX)',
-  rawMarc:     'NVARCHAR(MAX)',
-};
-
-// Desired full schema for users table
-const USERS_REQUIRED_COLUMNS: Record<string, string> = {
-  username:     'NVARCHAR(100)',
-  email:        'NVARCHAR(255)',
-  password:  'NVARCHAR(255)',
-  createdAt:    'DATETIME',
-};
-
-/** Read existing columns from INFORMATION_SCHEMA, return lowercased set */
-async function getExistingColumns(table: string): Promise<Set<string>> {
-  const result = await pool!.request()
-    .input('tbl', sql.NVarChar, table)
-    .query(`
-      SELECT LOWER(COLUMN_NAME) AS col
-      FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_NAME = @tbl
-    `);
-  return new Set(result.recordset.map((r: any) => r.col));
-}
-
-/** Add only the missing columns to a table */
-async function ensureColumns(
-  table: string,
-  required: Record<string, string>
-): Promise<void> {
-  const existing = await getExistingColumns(table);
-  const missing = Object.entries(required).filter(
-    ([col]) => !existing.has(col.toLowerCase())
-  );
-
-  if (missing.length === 0) {
-    return;
-  }
-
-  for (const [col, type] of missing) {
-    const nullable = type.includes('MAX') || type.includes('NVARCHAR') ? ' NULL' : ' NULL';
-    await pool!.request().query(
-      `ALTER TABLE [${table}] ADD [${col}] ${type}${nullable}`
-    );
-    console.log(`  ➕ [${table}].${col} ${type} — đã thêm`);
-  }
-}
-
-export async function initDb(): Promise<void> {
-  if (DEMO_MODE) {
-    console.log('DEMO_MODE=true: SQL Server connection skipped.');
-    return;
-  }
-  if (pool?.connected) return;
-  if (!SQL_CONNECTION_STRING) {
-    console.error('❌  SQL_CONNECTION_STRING chưa được cấu hình. Trên Vercel cần dùng SQL Server/Azure SQL public, không dùng localhost.');
-    return;
-  }
-
-  try {
-    pool = await sql.connect(SQL_CONNECTION_STRING);
-    console.log('SQL Server connected → librarydb');
-
-    //books table 
-    await pool.request().query(`
-      IF NOT EXISTS (SELECT 1 FROM sysobjects WHERE name='books' AND xtype='U')
-      CREATE TABLE books (
-        id          INT IDENTITY(1,1) PRIMARY KEY,
-        title       NVARCHAR(255)    NULL,
-        author      NVARCHAR(255)    NULL,
-        publishYear INT              NULL,
-        isbn        NVARCHAR(50)     NULL,
-        ddc         NVARCHAR(50)     NULL,
-        publisher   NVARCHAR(255)    NULL,
-        rawMarc     NVARCHAR(MAX)    NULL
-      )
-    `);
-    await ensureColumns('books', BOOKS_REQUIRED_COLUMNS);
-
-    //users table
-    await pool.request().query(`
-      IF NOT EXISTS (SELECT 1 FROM sysobjects WHERE name='users' AND xtype='U')
-      CREATE TABLE users (
-        id           INT IDENTITY(1,1) PRIMARY KEY,
-        username     NVARCHAR(100)  NOT NULL UNIQUE,
-        email        NVARCHAR(255)  NOT NULL UNIQUE,
-        [password]   NVARCHAR(255)  NOT NULL,
-        createdAt    DATETIME       NOT NULL DEFAULT GETDATE()
-      )
-    `);
-    await ensureColumns('users', USERS_REQUIRED_COLUMNS);
-
-  } catch (err: any) {
-    const hints: Record<string, string> = {
-      ELOGIN:  '  • Bật SQL Server and Windows Authentication trong SSMS > Properties > Security\n  • Đảm bảo tài khoản sa được Enable và mật khẩu đúng',
-      ESOCKET: '  • Kiểm tra SQL Server đang chạy\n  • Bật TCP/IP trong SQL Server Configuration Manager',
-    };
-    console.error(`❌  Kết nối SQL Server thất bại [${err.code ?? 'ERR'}]`);
-    console.error(hints[err.code] ?? `  ${err.message}`);
-  }
-}
-
-export async function ensureDbInitialized(): Promise<void> {
-  if (DEMO_MODE) return;
-  if (pool?.connected) return;
-
-  if (!dbInitPromise) {
-    dbInitPromise = initDb().finally(() => {
-      if (!pool?.connected) dbInitPromise = null;
-    });
-  }
-
-  await dbInitPromise;
-}
-
 /*EXPRESS APP*/
 export const app = express();
 app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
-function needsDatabase(pathname: string): boolean {
-  if (DEMO_MODE) return false;
-  return pathname.startsWith('/api/auth') || pathname.startsWith('/api/books');
-}
-
-app.use(async (req: Request, _res: Response, next: NextFunction) => {
-  if (needsDatabase(req.path)) {
-    await ensureDbInitialized();
-  }
-  next();
-});
-
 /*HELPERS */
-function requireDb(res: Response): boolean {
-  if (DEMO_MODE) return true;
-  if (!pool?.connected) { res.status(503).json({ error: 'Chưa kết nối CSDL SQL Server' }); return false; }
-  return true;
-}
 function requireAi(res: Response): boolean {
   if (!ai)   { res.status(400).json({ error: 'AI chưa được khởi tạo — kiểm tra GEMINI_API_KEY1' }); return false; }
   return true;
@@ -203,9 +47,9 @@ let demoBookId = 1;
 const demoUsers: DemoUser[] = [
   {
     id: demoUserId++,
-    username: 'demo',
-    email: 'demo@example.com',
-    password: hashPassword('demo123'),
+    username: 'admin',
+    email: 'admin@gmail.com',
+    password: hashPassword('admin123'),
   },
 ];
 const demoBooks: any[] = [];
@@ -222,7 +66,10 @@ Bạn là CHUYÊN GIA THƯ VIỆN HỌC. Nhiệm vụ:
 1. Nhận diện hình ảnh sách (bìa trước, bìa sau, mục lục, trang bản quyền...).
 2. Đọc kỹ để lấy tóm tắt, mục lục và thông tin xuất bản.
    - Nếu ảnh chỉ có mục lục hoặc nội dung (không có bìa), dùng Google Search để xác định tên sách và tác giả.
-3. Dùng Google Search để bổ sung thêm thông tin còn thiếu (ISBN, DDC, số trang...).
+3. Dùng Google Search để bổ sung thêm thông tin còn thiếu (ISBN, số trang, nhà xuất bản...).
+   - Riêng DDC (082): CHỈ điền khi nhìn thấy trực tiếp trên ảnh, trang bản quyền/CIP, gáy nhãn thư viện, hoặc tìm được trong bản ghi thư mục đáng tin cậy có trường DDC/082.
+   - KHÔNG suy đoán DDC theo thể loại, tên sách, tác giả hoặc chủ đề. Nếu không có nguồn rõ ràng, để "ddc": "".
+   - Không dùng một mã DDC mặc định/lặp lại cho nhiều sách. Sách văn học, thiếu nhi, kỹ năng... có thể cùng lớp rộng nhưng vẫn không được tự gán nếu thiếu nguồn.
 
 [YÊU CẦU BẮT BUỘC]
 - Trả về DUY NHẤT một JSON hợp lệ. KHÔNG thêm văn bản, giải thích hay markdown bên ngoài.
@@ -234,7 +81,7 @@ Bạn là CHUYÊN GIA THƯ VIỆN HỌC. Nhiệm vụ:
   "year": 2024,
   "publisher": "Nhà xuất bản",
   "isbn": "ISBN",
-  "ddc": "Phân loại DDC",
+  "ddc": "Phân loại DDC nếu có nguồn rõ ràng, nếu không để chuỗi rỗng",
   "language": "vie",
   "physical": "Mô tả vật lý",
   "pageCount": "Số trang",
@@ -245,109 +92,58 @@ Bạn là CHUYÊN GIA THƯ VIỆN HỌC. Nhiệm vụ:
 }
 `.trim();
 
-/*AUTH ROUTES  (dùng bảng users trong SQL)*/
+/*AUTH ROUTES  (in-memory)*/
 
 // POST /api/auth/register
 app.post('/api/auth/register', async (req: Request, res: Response) => {
-  if (!requireDb(res)) return;
   const { username, email, password } = req.body;
 
   if (!username?.trim() || !email?.trim() || !password?.trim()) {
     return res.status(400).json({ error: 'Vui lòng điền đầy đủ thông tin' });
   }
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Mật khẩu phải có ít nhất 6 ký tự' });
+  if (password.length < 3) {
+    return res.status(400).json({ error: 'Mật khẩu phải có ít nhất 3 ký tự' });
   }
 
-  if (DEMO_MODE) {
-    const cleanUsername = username.trim();
-    const cleanEmail = email.trim();
-    const exists = demoUsers.some(
-      user => user.username === cleanUsername || user.email === cleanEmail
-    );
+  const cleanUsername = username.trim();
+  const cleanEmail = email.trim();
+  const exists = demoUsers.some(
+    user => user.username === cleanUsername || user.email === cleanEmail
+  );
 
-    if (exists) {
-      return res.status(409).json({ error: 'Email hoac ten dang nhap da ton tai' });
-    }
-
-    const user = {
-      id: demoUserId++,
-      username: cleanUsername,
-      email: cleanEmail,
-      password: hashPassword(password),
-    };
-    demoUsers.push(user);
-    return res.status(201).json({ id: user.id, username: user.username, email: user.email });
+  if (exists) {
+    return res.status(409).json({ error: 'Email hoặc tên đăng nhập đã tồn tại' });
   }
 
-  try {
-    // Check duplicate
-    const exists = await pool!.request()
-      .input('email',    sql.NVarChar, email.trim())
-      .input('username', sql.NVarChar, username.trim())
-      .query('SELECT id FROM users WHERE email = @email OR username = @username');
-
-    if (exists.recordset.length > 0) {
-      return res.status(409).json({ error: 'Email hoặc tên đăng nhập đã tồn tại' });
-    }
-
-    const result = await pool!.request()
-      .input('username',     sql.NVarChar, username.trim())
-      .input('email',        sql.NVarChar, email.trim())
-      .input('password', sql.NVarChar, hashPassword(password))
-      .query(`
-        INSERT INTO users (username, email, [password], createdAt)
-        OUTPUT inserted.id, inserted.username, inserted.email
-        VALUES (@username, @email, @password, GETDATE())
-      `);
-
-    const user = result.recordset[0];
-    res.status(201).json({ id: user.id, username: user.username, email: user.email });
-  } catch (err: any) {
-    console.error('POST /api/auth/register', err.message);
-    res.status(500).json({ error: 'Lỗi đăng ký tài khoản' });
-  }
+  const user = {
+    id: demoUserId++,
+    username: cleanUsername,
+    email: cleanEmail,
+    password: hashPassword(password),
+  };
+  demoUsers.push(user);
+  return res.status(201).json({ id: user.id, username: user.username, email: user.email });
 });
 
 // POST /api/auth/login
 app.post('/api/auth/login', async (req: Request, res: Response) => {
-  if (!requireDb(res)) return;
   const { username, password } = req.body;
 
   if (!username?.trim() || !password?.trim()) {
     return res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu' });
   }
 
-  if (DEMO_MODE) {
-    const cleanUsername = username.trim();
-    const hashedPassword = hashPassword(password);
-    const user = demoUsers.find(
-      item => item.username === cleanUsername && item.password === hashedPassword
-    );
+  const cleanUsername = username.trim();
+  const hashedPassword = hashPassword(password);
+  const user = demoUsers.find(
+    item => item.username === cleanUsername && item.password === hashedPassword
+  );
 
-    if (!user) {
-      return res.status(401).json({ error: 'Ten dang nhap hoac mat khau khong dung' });
-    }
-
-    return res.json({ id: user.id, username: user.username, email: user.email });
+  if (!user) {
+    return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không đúng' });
   }
 
-  try {
-    const result = await pool!.request()
-      .input('username',  sql.NVarChar, username.trim())
-      .input('password',  sql.NVarChar, hashPassword(password))
-      .query('SELECT id, username, email FROM users WHERE username = @username AND [password] = @password');
-
-    if (result.recordset.length === 0) {
-      return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không đúng' });
-    }
-
-    const user = result.recordset[0];
-    res.json({ id: user.id, username: user.username, email: user.email });
-  } catch (err: any) {
-    console.error('POST /api/auth/login', err.message);
-    res.status(500).json({ error: 'Lỗi đăng nhập' });
-  }
+  return res.json({ id: user.id, username: user.username, email: user.email });
 });
 
 /*BOOK ROUTES*/
@@ -401,110 +197,82 @@ app.post('/api/extract', upload.array('images', 10), async (req: Request, res: R
 
 // GET /api/books
 app.get('/api/books', async (_req: Request, res: Response) => {
-  if (!requireDb(res)) return;
-  if (DEMO_MODE) {
-    return res.json([...demoBooks].sort((a, b) => b.id - a.id));
-  }
-
-  try {
-    const { recordset } = await pool!.request().query('SELECT * FROM books ORDER BY id DESC');
-    res.json(recordset);
-  } catch (err: any) {
-    console.error('GET /api/books', err.message);
-    res.status(500).json({ error: 'Lỗi lấy dữ liệu' });
-  }
+  return res.json([...demoBooks].sort((a, b) => b.id - a.id));
 });
 
 // POST /api/books
 app.post('/api/books', async (req: Request, res: Response) => {
-  if (!requireDb(res)) return;
-
   const {
     title, author, year, isbn, ddc, publisher,
     language, physical, pageCount, dimensions,
     summary, toc, subjects, rawOcrText,
+    rawMarc, marcLeader, marcFields,
+    searchSnippet,
+    subtitle, publishedDate, isbn10, isbn13, mainCategory,
+    googleBooksId, selfLink, previewLink, infoLink, canonicalVolumeLink,
+    thumbnail, printType, averageRating, ratingsCount, maturityRating,
+    contentVersion, saleability, isEbook, country, viewability,
+    accessViewStatus, embeddable, publicDomain, webReaderLink,
   } = req.body;
 
   const subjectsStr = Array.isArray(subjects) ? subjects.join('; ') : (subjects ?? '');
 
-  if (DEMO_MODE) {
-    const book = {
-      id: demoBookId++,
-      title: title || 'Khong ro',
-      author: author || '',
-      publishYear: year ? Number(year) : null,
-      isbn: isbn || '',
-      ddc: ddc || '',
-      publisher: publisher || '',
-      language: language || '',
-      physical: physical || '',
-      pageCount: pageCount || '',
-      dimensions: dimensions || '',
-      summary: summary || '',
-      toc: toc || '',
-      subjects: subjectsStr,
-      rawMarc: rawOcrText || '',
-    };
-    demoBooks.push(book);
-    return res.status(201).json({ id: book.id, title: book.title, author: book.author });
-  }
-
-  try {
-    const result = await pool!.request()
-      .input('title',      sql.NVarChar, title      || 'Không rõ')
-      .input('author',     sql.NVarChar, author     || '')
-      .input('year',       sql.Int,      year       || null)
-      .input('isbn',       sql.NVarChar, isbn       || '')
-      .input('ddc',        sql.NVarChar, ddc        || '')
-      .input('publisher',  sql.NVarChar, publisher  || '')
-      .input('language',   sql.NVarChar, language   || '')
-      .input('physical',   sql.NVarChar, physical   || '')
-      .input('pageCount',  sql.NVarChar, pageCount  || '')
-      .input('dimensions', sql.NVarChar, dimensions || '')
-      .input('summary',    sql.NVarChar, summary    || '')
-      .input('toc',        sql.NVarChar, toc        || '')
-      .input('subjects',   sql.NVarChar, subjectsStr)
-      .input('rawMarc',    sql.NVarChar, rawOcrText || '')
-      .query(`
-        INSERT INTO books
-          (title, author, publishYear, isbn, ddc, publisher,
-           language, physical, pageCount, dimensions,
-           summary, toc, subjects, rawMarc)
-        OUTPUT inserted.id
-        VALUES
-          (@title, @author, @year, @isbn, @ddc, @publisher,
-           @language, @physical, @pageCount, @dimensions,
-           @summary, @toc, @subjects, @rawMarc)
-      `);
-
-    res.status(201).json({ id: result.recordset[0].id, title, author });
-  } catch (err: any) {
-    console.error('POST /api/books', err.message);
-    res.status(500).json({ error: 'Lỗi lưu sách' });
-  }
+  const book = {
+    id: demoBookId++,
+    title: title || 'Không rõ',
+    author: author || '',
+    publishYear: year ? Number(year) : null,
+    isbn: isbn || '',
+    ddc: ddc || '',
+    publisher: publisher || '',
+    language: language || '',
+    physical: physical || '',
+    pageCount: pageCount || '',
+    dimensions: dimensions || '',
+    summary: summary || '',
+    searchSnippet: searchSnippet || '',
+    toc: toc || '',
+    subjects: subjectsStr,
+    rawMarc: rawOcrText || rawMarc || '',
+    marcLeader: marcLeader || '',
+    marcFields: Array.isArray(marcFields) ? marcFields : [],
+    subtitle: subtitle || '',
+    publishedDate: publishedDate || '',
+    isbn10: isbn10 || '',
+    isbn13: isbn13 || '',
+    mainCategory: mainCategory || '',
+    googleBooksId: googleBooksId || '',
+    selfLink: selfLink || '',
+    previewLink: previewLink || '',
+    infoLink: infoLink || '',
+    canonicalVolumeLink: canonicalVolumeLink || '',
+    thumbnail: thumbnail || '',
+    printType: printType || '',
+    averageRating: averageRating || '',
+    ratingsCount: ratingsCount || '',
+    maturityRating: maturityRating || '',
+    contentVersion: contentVersion || '',
+    saleability: saleability || '',
+    isEbook: isEbook || '',
+    country: country || '',
+    viewability: viewability || '',
+    accessViewStatus: accessViewStatus || '',
+    embeddable: embeddable || '',
+    publicDomain: publicDomain || '',
+    webReaderLink: webReaderLink || '',
+  };
+  demoBooks.push(book);
+  return res.status(201).json({ id: book.id, title: book.title, author: book.author });
 });
 // DELETE /api/books/:id
 app.delete('/api/books/:id', async (req: Request, res: Response) => {
-  if (!requireDb(res)) return;
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) return res.status(400).json({ error: 'ID không hợp lệ' });
-  if (DEMO_MODE) {
-    const index = demoBooks.findIndex(book => book.id === id);
-    if (index === -1) return res.status(404).json({ error: 'Khong tim thay sach' });
-    demoBooks.splice(index, 1);
-    return res.json({ success: true, id });
-  }
 
-  try {
-    const result = await pool!.request()
-      .input('id', sql.Int, id)
-      .query('DELETE FROM books WHERE id = @id');
-    if (result.rowsAffected[0] === 0) return res.status(404).json({ error: 'Không tìm thấy sách' });
-    res.json({ success: true, id });
-  } catch (err: any) {
-    console.error('DELETE /api/books', err.message);
-    res.status(500).json({ error: 'Lỗi xóa sách' });
-  }
+  const index = demoBooks.findIndex(book => book.id === id);
+  if (index === -1) return res.status(404).json({ error: 'Không tìm thấy sách' });
+  demoBooks.splice(index, 1);
+  return res.json({ success: true, id });
 });
 // GET /api/catalog/search?host
 app.get('/api/catalog/search', async (req: Request, res: Response) => {
@@ -556,14 +324,45 @@ app.get('/api/catalog/search', async (req: Request, res: Response) => {
 
 /*NLV SCRAPE — tìm kiếm opac.nlv.gov.vn qua HTTP (không cần Z39.50 TCP)*/
 
-// ── NLV qua WorldCat SRU (public) + Google Books làm fallback cho sách Việt ──
+// NLV OPAC search: mô phỏng POST /Search của website, rồi tải MARC ISO2709 từ trang chi tiết.
+app.get('/api/catalog/search-nlv-opac', async (req: Request, res: Response) => {
+  const { searchType = 'title', query } = req.query as Record<string, string>;
+  if (!query?.trim()) return res.status(400).json({ error: 'Thiáº¿u tham sá»‘ query' });
+
+  const cacheKey = `${searchType}:${query.toLowerCase().trim()}`;
+  const cached = nlvOpacCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < NLV_OPAC_CACHE_TTL) {
+    return res.json({
+      records: cached.records,
+      total: cached.total,
+      returned: cached.records.length,
+      source: 'Thư viện Quốc gia Việt Nam OPAC',
+    });
+  }
+
+  try {
+    const result = await searchNlvOpac(searchType, query.trim());
+    nlvOpacCache.set(cacheKey, { ts: Date.now(), records: result.records, total: result.total });
+    res.json({
+      records: result.records,
+      total: result.total,
+      returned: result.records.length,
+      source: 'Thư viện Quốc gia Việt Nam OPAC',
+    });
+  } catch (err: any) {
+    console.error('GET /api/catalog/search-nlv-opac', err.message);
+    res.status(502).json({ error: `Không thể tìm trên OPAC Thư viện Quốc gia Việt Nam: ${err.message}` });
+  }
+});
+
+// Google Books search, reranked locally for Vietnamese cataloging.
 app.get('/api/catalog/search-nlv', async (req: Request, res: Response) => {
   const { searchType = 'title', query } = req.query as Record<string, string>;
   if (!query?.trim()) return res.status(400).json({ error: 'Thiếu tham số query' });
 
   try {
     const records = await searchVietnameseBooks(searchType, query.trim());
-    res.json({ records, total: records.length, source: 'Google Books / WorldCat (Việt Nam)' });
+    res.json({ records, total: records.length, source: 'Google Books' });
   } catch (err: any) {
     console.error('GET /api/catalog/search-nlv', err.message);
     res.status(502).json({ error: `Lỗi tìm kiếm: ${err.message}` });
@@ -575,6 +374,402 @@ app.get('/api/catalog/search-nlv', async (req: Request, res: Response) => {
 // Cache đơn giản: key = "searchType:query", TTL 10 phút
 const gbCache = new Map<string, { ts: number; result: object[] }>();
 const GB_CACHE_TTL = 10 * 60 * 1000;
+const GOOGLE_BOOKS_MAX_RESULTS = 20;
+const GOOGLE_BOOKS_RETURN_LIMIT = 12;
+const NLV_OPAC_BASE_URL = 'https://opac.nlv.gov.vn';
+const NLV_OPAC_TIMEOUT_MS = 20000;
+const NLV_OPAC_MAX_RESULTS = 10;
+const NLV_OPAC_CACHE_TTL = 5 * 60 * 1000;
+const LOC_SRU_TIMEOUT_MS = 30000;
+const LOC_SRU_MAX_RECORDS = 10;
+const LOC_SRU_BASE_URLS = [
+  'https://lx2.loc.gov/sru/lcdb',
+  'http://lx2.loc.gov:210/lcdb',
+];
+
+const nlvOpacCache = new Map<string, { ts: number; records: object[]; total: number }>();
+
+type CatalogSearchType = 'title' | 'author' | 'isbn' | 'keyword';
+
+interface NlvOpacSession {
+  token: string;
+  cookie: string;
+}
+
+interface NlvOpacRow {
+  opacId: string;
+  href: string;
+  slug: string;
+  title: string;
+  author: string;
+  year: string;
+  publisher: string;
+  ddc: string;
+  physical: string;
+  pageCount: string;
+  dimensions: string;
+  summary: string;
+  subjects: string[];
+}
+
+interface GoogleBooksSearchPlan {
+  q: string;
+  langRestrict?: string;
+}
+
+interface GoogleBookResult {
+  item: any;
+  planIndex: number;
+  itemIndex: number;
+}
+
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&#x([0-9A-Fa-f]+);/g, (_m, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_m, d) => String.fromCodePoint(parseInt(d, 10)))
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function stripHtml(value = ''): string {
+  return decodeHtmlEntities(value)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function splitSetCookie(header: string | null): string[] {
+  if (!header) return [];
+  return header
+    .split(/,(?=\s*[^;,=]+=[^;,]+)/g)
+    .map(part => part.split(';')[0].trim())
+    .filter(Boolean);
+}
+
+function extractVerificationToken(html: string): string {
+  return html.match(/id=requestVerificationToken value=([^>\s]+)/)?.[1]
+    ?? html.match(/id=["']requestVerificationToken["'][^>]*value=["']([^"']+)/)?.[1]
+    ?? '';
+}
+
+function normalizeNlvCookie(resp: globalThis.Response): string {
+  return splitSetCookie(resp.headers.get('set-cookie')).join('; ');
+}
+
+function mapNlvSearchOption(searchType: string): string {
+  const map: Record<string, string> = {
+    title: 'ti',
+    author: 'au',
+    isbn: 'bn',
+    keyword: 'kw',
+  };
+  return map[searchType] ?? 'qs';
+}
+
+function parseYear(value: string): string {
+  return (value.match(/\b(1[5-9]\d{2}|20\d{2})\b/) || [])[0] ?? '';
+}
+
+function parsePublisher(publication: string): string {
+  return publication
+    .replace(/\b(1[5-9]\d{2}|20\d{2})\b.*$/, '')
+    .replace(/^[^:]*:\s*/, '')
+    .replace(/[.,;:\s-]+$/g, '')
+    .trim();
+}
+
+function parsePhysicalParts(physical: string): { pageCount: string; dimensions: string } {
+  const pageCount = (physical.match(/(\d+)\s*(?:tr|tr\.|p|p\.)/i) || physical.match(/(\d+)/))?.[1] ?? '';
+  const dimensions = (physical.match(/(\d+(?:\s*x\s*\d+)?\s*cm)\b/i) || [])[1] ?? '';
+  return { pageCount, dimensions };
+}
+
+function extractParagraphValue(block: string, label: string): string {
+  const re = new RegExp(`${escapeRegExp(label)}:\\s*<span[^>]*>([\\s\\S]*?)<\\/span>`, 'i');
+  return stripHtml(re.exec(block)?.[1] ?? '');
+}
+
+function extractNlvSubjects(block: string): string[] {
+  const subjectBlock = block.match(/Từ khóa:\s*([\s\S]*?)(?:<\/p>|<p|$)/i)?.[1] ?? '';
+  return [...subjectBlock.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/gi)]
+    .map(match => stripHtml(match[1]))
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function parseNlvOpacTotal(html: string, rowsLength: number): number {
+  const text = stripHtml(html);
+  const match = text.match(/Kết quả\s+\d+\s*-\s*\d+\s+trong\s+([\d.,]+)/i);
+  if (!match) return rowsLength;
+  return Number(match[1].replace(/[^\d]/g, '')) || rowsLength;
+}
+
+function parseNlvOpacRows(html: string): NlvOpacRow[] {
+  const blockRe = /<div\s+data-id="([^"]+)"\s+class="result-block__main__bookContainer"[\s\S]*?(?=<div\s+data-id="[^"]+"\s+class="result-block__main__bookContainer"|<nav|$)/gi;
+  const rows: NlvOpacRow[] = [];
+
+  for (const match of html.matchAll(blockRe)) {
+    const block = match[0];
+    const titleMatch = block.match(/<a[^>]*class=['"]result-block__main__bookContainer__info_title['"][^>]*href=['"]([^'"]+)['"][^>]*>([\s\S]*?)<\/a>/i);
+    const href = decodeHtmlEntities(titleMatch?.[1] ?? '');
+    const title = stripHtml(titleMatch?.[2] ?? '');
+    const author = stripHtml(block.match(/<p class=['"]authors['"]>([\s\S]*?)<\/p>/i)?.[1] ?? '')
+      .replace(/^Tác giả:\s*/i, '')
+      .replace(/\s*;\s*/g, '; ')
+      .trim();
+    const publication = extractParagraphValue(block, 'Thông tin xuất bản');
+    const physical = extractParagraphValue(block, 'Thông tin vật lý');
+    const physicalParts = parsePhysicalParts(physical);
+
+    rows.push({
+      opacId: match[1],
+      href,
+      slug: href.split('/').filter(Boolean).pop()?.split('?')[0] ?? '',
+      title,
+      author,
+      year: parseYear(publication),
+      publisher: parsePublisher(publication),
+      ddc: extractParagraphValue(block, 'Phân loại').split('/')[0]?.trim() ?? '',
+      physical,
+      pageCount: physicalParts.pageCount,
+      dimensions: physicalParts.dimensions,
+      summary: stripHtml(block.match(/result-block__main__bookContainer__info_summary[^>]*>[\s\S]*?<span[^>]*>([\s\S]*?)<\/span>/i)?.[1] ?? ''),
+      subjects: extractNlvSubjects(block),
+    });
+  }
+
+  return rows.filter(row => row.title || row.opacId);
+}
+
+function getMarcSubfield(fields: MarcField[], tag: string, code: string): string {
+  const field = fields.find(item => item.tag === tag && item.subfields?.some(sub => sub.code === code));
+  return field?.subfields?.find(sub => sub.code === code)?.value ?? '';
+}
+
+function getMarcSubfields(fields: MarcField[], tags: string[], code: string): string[] {
+  return fields
+    .filter(field => tags.includes(field.tag))
+    .flatMap(field => field.subfields?.filter(sub => sub.code === code).map(sub => sub.value) ?? [])
+    .filter(Boolean);
+}
+
+function buildRecordFromMarcFields(fields: MarcField[], index: number, source: string, rawMarc = '', leader = ''): MarcRecord | null {
+  if (fields.length === 0) return null;
+
+  const titleA = getMarcSubfield(fields, '245', 'a').replace(/[/:]+$/, '').trim();
+  const titleB = getMarcSubfield(fields, '245', 'b').replace(/[/:]+$/, '').trim();
+  const physical = getMarcSubfield(fields, '300', 'a');
+  const physicalParts = parsePhysicalParts(physical);
+  const yearValue = getMarcSubfield(fields, '260', 'c') || getMarcSubfield(fields, '264', 'c');
+
+  return {
+    id: `nlv_${Date.now()}_${index}`,
+    marcLeader: leader,
+    marcFields: fields,
+    title: [titleA, titleB].filter(Boolean).join(' ').trim(),
+    author: getMarcSubfield(fields, '100', 'a') || getMarcSubfield(fields, '700', 'a'),
+    year: parseYear(yearValue),
+    isbn: getMarcSubfield(fields, '020', 'a'),
+    publisher: getMarcSubfield(fields, '260', 'b') || getMarcSubfield(fields, '264', 'b'),
+    ddc: getMarcSubfield(fields, '082', 'a'),
+    language: getMarcSubfield(fields, '041', 'a'),
+    physical,
+    pageCount: physicalParts.pageCount,
+    dimensions: getMarcSubfield(fields, '300', 'c') || physicalParts.dimensions,
+    summary: getMarcSubfield(fields, '520', 'a'),
+    subjects: getMarcSubfields(fields, ['600', '610', '650', '651', '653'], 'a').slice(0, 8),
+    rawMarc,
+    source,
+  };
+}
+
+function parseNlvMarcTable(detailHtml: string, index: number, source: string): MarcRecord | null {
+  const table = detailHtml.match(/<table[^>]*class=["'][^"']*marc21[^"']*["'][^>]*>([\s\S]*?)<\/table>/i)?.[1];
+  if (!table) return null;
+
+  const fields: MarcField[] = [];
+  let current: MarcField | null = null;
+
+  for (const rowMatch of table.matchAll(/<tr[^>]*>([\s\S]*?)(?=<tr|<\/tbody>|<\/table>|$)/gi)) {
+    const cells = [...rowMatch[1].matchAll(/<td[^>]*>([\s\S]*?)(?=<td|<\/tr>|$)/gi)]
+      .map(cell => stripHtml(cell[1]).replace(/^#$/, ''));
+    if (cells.length < 5) continue;
+
+    const [tag, ind1, ind2, code, value] = cells;
+    if (tag) {
+      current = /^\d{3}$/.test(tag) && code
+        ? { tag, ind1: ind1 || ' ', ind2: ind2 || ' ', subfields: [], raw: `${ind1 || ' '}${ind2 || ' '}` }
+        : { tag, value, raw: value };
+      fields.push(current);
+    }
+
+    if (current?.subfields && code && value) {
+      current.subfields.push({ code, value });
+      current.raw += `\x1f${code}${value}`;
+    } else if (current && value && !current.value) {
+      current.value = value;
+      current.raw = value;
+    }
+  }
+
+  return buildRecordFromMarcFields(fields, index, source, '', '');
+}
+
+function mergeNlvRowWithMarc(row: NlvOpacRow, marc: MarcRecord | null, index: number): object {
+  const detailUrl = row.href ? new URL(row.href, NLV_OPAC_BASE_URL).toString() : '';
+  return {
+    ...(marc ?? {}),
+    id: `nlv_${row.opacId || index}`,
+    opacId: row.opacId,
+    title: marc?.title || row.title,
+    author: marc?.author || row.author,
+    year: marc?.year || row.year,
+    isbn: marc?.isbn || '',
+    publisher: marc?.publisher || row.publisher,
+    ddc: marc?.ddc || row.ddc,
+    language: marc?.language || '',
+    physical: marc?.physical || row.physical,
+    pageCount: marc?.pageCount || row.pageCount,
+    dimensions: marc?.dimensions || row.dimensions,
+    summary: marc?.summary || row.summary,
+    searchSnippet: row.summary,
+    subjects: marc?.subjects?.length ? marc.subjects : row.subjects,
+    rawMarc: marc?.rawMarc || '',
+    marcLeader: marc?.marcLeader || '',
+    marcFields: marc?.marcFields || [],
+    source: 'Thư viện Quốc gia Việt Nam OPAC',
+    infoLink: detailUrl,
+    canonicalVolumeLink: detailUrl,
+  };
+}
+
+async function createNlvOpacSession(pathname = '/tim-kiem'): Promise<NlvOpacSession> {
+  const resp = await fetch(`${NLV_OPAC_BASE_URL}${pathname}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/html,*/*' },
+    signal: AbortSignal.timeout(NLV_OPAC_TIMEOUT_MS),
+  });
+
+  if (!resp.ok) throw new Error(`OPAC trả về HTTP ${resp.status}`);
+  const html = await resp.text();
+  return { token: extractVerificationToken(html), cookie: normalizeNlvCookie(resp) };
+}
+
+async function fetchNlvOpacSearchHtml(searchType: string, query: string, session: NlvOpacSession): Promise<string> {
+  const payload = {
+    type: 'quick',
+    page: 1,
+    pageSize: NLV_OPAC_MAX_RESULTS,
+    request: {
+      searchBy: [['option', mapNlvSearchOption(searchType)], ['keyword', query]],
+      sortBy: [['year_pub', 'desc']],
+      filterBy: [],
+    },
+    hasFacetFilter: true,
+  };
+
+  const resp = await fetch(`${NLV_OPAC_BASE_URL}/Search`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'RequestVerificationToken': session.token,
+      'Cookie': session.cookie,
+      'User-Agent': 'Mozilla/5.0',
+      'Accept': 'text/html,*/*',
+      'Referer': `${NLV_OPAC_BASE_URL}/tim-kiem`,
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(NLV_OPAC_TIMEOUT_MS),
+  });
+
+  if (!resp.ok) throw new Error(`/Search trả về HTTP ${resp.status}`);
+  return resp.text();
+}
+
+async function fetchNlvOpacMarc(row: NlvOpacRow, index: number): Promise<MarcRecord | null> {
+  if (!row.slug) return null;
+
+  const detailPath = row.href.startsWith('/') ? row.href : `/chi-tiet-tai-lieu/${row.slug}`;
+  const detailUrl = new URL(detailPath, NLV_OPAC_BASE_URL).toString();
+  const detailResp = await fetch(detailUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/html,*/*' },
+    signal: AbortSignal.timeout(NLV_OPAC_TIMEOUT_MS),
+  });
+  if (!detailResp.ok) throw new Error(`detail ${row.slug} trả về HTTP ${detailResp.status}`);
+
+  const detailHtml = await detailResp.text();
+  const detailToken = extractVerificationToken(detailHtml);
+  const detailCookie = normalizeNlvCookie(detailResp);
+  const detailTitle = stripHtml(detailHtml.match(/<p class=top-block__infoBlock__title>([\s\S]*?)(?:<div|<\/p>)/i)?.[1] ?? '')
+    || decodeHtmlEntities(detailHtml.match(/<meta property=og:title content="([^"]+)"/i)?.[1] ?? '')
+    || row.title;
+
+  const downloadUrl = `${NLV_OPAC_BASE_URL}/download-marc?slug=${encodeURIComponent(row.slug)}&title=${encodeURIComponent(detailTitle)}`;
+  const marcResp = await fetch(downloadUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'RequestVerificationToken': detailToken,
+      'Cookie': detailCookie,
+      'User-Agent': 'Mozilla/5.0',
+      'Accept': 'application/octet-stream,text/plain,*/*',
+      'Referer': detailUrl,
+    },
+    signal: AbortSignal.timeout(NLV_OPAC_TIMEOUT_MS),
+  });
+
+  const marcBuffer = Buffer.from(await marcResp.arrayBuffer());
+  const contentType = marcResp.headers.get('content-type') ?? '';
+  if (marcResp.ok && !contentType.includes('text/html') && !marcBuffer.toString('utf8', 0, 20).startsWith('<')) {
+    const parsed = parseMarcIso2709(marcBuffer, index, 'Thư viện Quốc gia Việt Nam OPAC');
+    if (parsed) return parsed;
+  }
+
+  return parseNlvMarcTable(detailHtml, index, 'Thư viện Quốc gia Việt Nam OPAC');
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+
+  async function worker() {
+    while (next < items.length) {
+      const current = next++;
+      results[current] = await mapper(items[current], current);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
+async function searchNlvOpac(searchType: string, query: string): Promise<{ records: object[]; total: number }> {
+  const session = await createNlvOpacSession();
+  const html = await fetchNlvOpacSearchHtml(searchType, query, session);
+  const rows = parseNlvOpacRows(html);
+  const total = parseNlvOpacTotal(html, rows.length);
+
+  const records = await mapWithConcurrency(rows.slice(0, NLV_OPAC_MAX_RESULTS), 4, async (row, index) => {
+    try {
+      const marc = await fetchNlvOpacMarc(row, index);
+      return mergeNlvRowWithMarc(row, marc, index);
+    } catch (err: any) {
+      console.warn(`NLV OPAC MARC ${row.slug || row.opacId} failed: ${err.message}`);
+      return mergeNlvRowWithMarc(row, null, index);
+    }
+  });
+
+  return { records, total };
+}
 
 async function fetchWithRetry(url: string, maxRetries = 3): Promise<any> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -597,65 +792,242 @@ async function fetchWithRetry(url: string, maxRetries = 3): Promise<any> {
   }
 }
 
+function cleanSearchTerm(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').replace(/"/g, '');
+}
+
+function quoteSearchTerm(value: string): string {
+  return `"${cleanSearchTerm(value)}"`;
+}
+
+function normalizeForMatch(value: unknown): string {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+function extractIsbn(value: string): string {
+  const compact = value.replace(/[^0-9Xx]/g, '').toUpperCase();
+  if (compact.length === 10 || compact.length === 13) return compact;
+  const found = value.match(/(?:97[89][-\s]?)?\d[-\s\d]{8,}[\dXx]/);
+  return found ? found[0].replace(/[^0-9Xx]/g, '').toUpperCase() : compact;
+}
+
+function buildGoogleBooksPlans(searchType: string, query: string): GoogleBooksSearchPlan[] {
+  const type = (['title', 'author', 'isbn', 'keyword'].includes(searchType) ? searchType : 'keyword') as CatalogSearchType;
+  const term = cleanSearchTerm(query);
+  const exact = quoteSearchTerm(term);
+  const isbn = extractIsbn(term);
+  const plans: GoogleBooksSearchPlan[] = [];
+
+  if (type === 'isbn') {
+    plans.push({ q: `isbn:${isbn || term}` });
+  } else if (type === 'title') {
+    plans.push(
+      { q: term, langRestrict: 'vi' },
+      { q: term },
+      { q: exact, langRestrict: 'vi' },
+      { q: `intitle:${term}`, langRestrict: 'vi' },
+      { q: `intitle:${exact}` },
+      { q: exact },
+    );
+  } else if (type === 'author') {
+    plans.push(
+      { q: `inauthor:${exact}` },
+      { q: `inauthor:${term}` },
+      { q: exact },
+    );
+  } else {
+    plans.push(
+      { q: exact, langRestrict: 'vi' },
+      { q: term, langRestrict: 'vi' },
+      { q: exact },
+      { q: term },
+    );
+  }
+
+  const seen = new Set<string>();
+  return plans.filter(plan => {
+    const key = `${plan.q}|${plan.langRestrict ?? ''}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return Boolean(plan.q.trim());
+  });
+}
+
+function getGoogleBooksIdentifier(vi: any, type: string): string {
+  return (vi.industryIdentifiers ?? []).find((item: any) => item.type === type)?.identifier ?? '';
+}
+
+function formatGoogleBooksDimensions(dimensions: any): string {
+  if (!dimensions || typeof dimensions !== 'object') return '';
+  return [dimensions.height, dimensions.width, dimensions.thickness]
+    .filter(Boolean)
+    .join(' x ');
+}
+
+function boolLabel(value: unknown): string {
+  if (value === true) return 'Có';
+  if (value === false) return 'Không';
+  return '';
+}
+
+function uniqueNonEmpty(values: unknown[]): string[] {
+  return [...new Set(values.map(value => String(value ?? '').trim()).filter(Boolean))];
+}
+
+function cleanHtmlSnippet(value: unknown): string {
+  return String(value ?? '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function googleBookDedupeKey(item: any): string {
+  const vi = item.volumeInfo ?? {};
+  const isbn13 = (vi.industryIdentifiers ?? []).find((x: any) => x.type === 'ISBN_13')?.identifier;
+  const isbn10 = (vi.industryIdentifiers ?? []).find((x: any) => x.type === 'ISBN_10')?.identifier;
+  const isbn = String(isbn13 || isbn10 || '').replace(/[^0-9Xx]/g, '').toUpperCase();
+  if (isbn) return `isbn:${isbn}`;
+
+  const title = normalizeForMatch(vi.title);
+  const author = normalizeForMatch((vi.authors ?? []).join(' '));
+  return `book:${title}|${author}`;
+}
+
+async function fetchGoogleBooksPlan(plan: GoogleBooksSearchPlan): Promise<any[]> {
+  const apiKey = process.env.GOOGLE_BOOKS_API_KEY?.trim();
+  const params = new URLSearchParams({
+    q: plan.q,
+    maxResults: String(GOOGLE_BOOKS_MAX_RESULTS),
+    printType: 'books',
+    orderBy: 'relevance',
+  });
+  if (plan.langRestrict) params.set('langRestrict', plan.langRestrict);
+  if (apiKey) params.set('key', apiKey);
+
+  const url = `https://www.googleapis.com/books/v1/volumes?${params.toString()}`;
+  const safeUrl = apiKey ? url.replace(apiKey, '***KEY***') : url;
+  console.log(`[GB] URL: ${safeUrl}`);
+
+  const data = await fetchWithRetry(url);
+  console.log(`[GB] totalItems=${data.totalItems ?? 0}, items=${(data.items ?? []).length}, error=${JSON.stringify(data.error ?? null)}`);
+  if (data.error) throw new Error(`Google Books API lỗi: ${data.error.message ?? JSON.stringify(data.error)}`);
+
+  return Array.isArray(data.items) ? data.items : [];
+}
+
+async function searchGoogleBooks(searchType: string, query: string): Promise<object[]> {
+  const plans = buildGoogleBooksPlans(searchType, query);
+  const deduped = new Map<string, GoogleBookResult>();
+
+  for (const [planIndex, plan] of plans.entries()) {
+    const items = await fetchGoogleBooksPlan(plan);
+    items.forEach((item, itemIndex) => {
+      const key = googleBookDedupeKey(item);
+      const googleBook = {
+        item,
+        planIndex,
+        itemIndex,
+      };
+      if (!deduped.has(key)) {
+        deduped.set(key, googleBook);
+      }
+    });
+  }
+
+  return [...deduped.values()]
+    .slice(0, GOOGLE_BOOKS_RETURN_LIMIT)
+    .map((googleBook, i) => {
+      const vi = googleBook.item.volumeInfo ?? {};
+      const saleInfo = googleBook.item.saleInfo ?? {};
+      const accessInfo = googleBook.item.accessInfo ?? {};
+      const isbn13 = getGoogleBooksIdentifier(vi, 'ISBN_13');
+      const isbn10 = getGoogleBooksIdentifier(vi, 'ISBN_10');
+      const otherIdentifier = (vi.industryIdentifiers ?? []).find((x: any) => x.identifier)?.identifier ?? '';
+      const isbn = isbn13 || isbn10 || otherIdentifier;
+      const authors = (vi.authors ?? []).join('; ');
+      const year = (vi.publishedDate ?? '').slice(0, 4);
+      const language = vi.language === 'vi' ? 'vie' : (vi.language ?? '');
+      const subjects = uniqueNonEmpty([vi.mainCategory, ...(vi.categories ?? [])]).slice(0, 8);
+      const pageCount = vi.pageCount ? String(vi.pageCount) : '';
+      const dimensions = formatGoogleBooksDimensions(vi.dimensions);
+      const physical = [pageCount ? `${pageCount} trang` : '', dimensions].filter(Boolean).join('; ');
+      const thumbnail = (vi.imageLinks?.thumbnail ?? vi.imageLinks?.smallThumbnail ?? '').replace(/^http:/, 'https:');
+      const rawMarc = {
+        id: googleBook.item.id,
+        selfLink: googleBook.item.selfLink,
+        volumeInfo: vi,
+        saleInfo,
+        accessInfo,
+      };
+
+      return {
+        id: `gb_${googleBook.item.id ?? i}_${i}`,
+        title: vi.title ?? '',
+        subtitle: vi.subtitle ?? '',
+        author: authors,
+        year,
+        publishedDate: vi.publishedDate ?? '',
+        isbn,
+        isbn10,
+        isbn13,
+        publisher: vi.publisher ?? '',
+        ddc: '',
+        language,
+        physical,
+        pageCount,
+        dimensions,
+        summary: vi.description ? vi.description.slice(0, 1200) : '',
+        searchSnippet: cleanHtmlSnippet(googleBook.item.searchInfo?.textSnippet),
+        subjects,
+        mainCategory: vi.mainCategory ?? '',
+        googleBooksId: googleBook.item.id ?? '',
+        selfLink: googleBook.item.selfLink ?? '',
+        previewLink: vi.previewLink ?? '',
+        infoLink: vi.infoLink ?? '',
+        canonicalVolumeLink: vi.canonicalVolumeLink ?? '',
+        thumbnail,
+        printType: vi.printType ?? '',
+        averageRating: vi.averageRating ? String(vi.averageRating) : '',
+        ratingsCount: vi.ratingsCount ? String(vi.ratingsCount) : '',
+        maturityRating: vi.maturityRating ?? '',
+        contentVersion: vi.contentVersion ?? '',
+        saleability: saleInfo.saleability ?? '',
+        isEbook: boolLabel(saleInfo.isEbook),
+        country: saleInfo.country ?? '',
+        viewability: accessInfo.viewability ?? '',
+        accessViewStatus: accessInfo.accessViewStatus ?? '',
+        embeddable: boolLabel(accessInfo.embeddable),
+        publicDomain: boolLabel(accessInfo.publicDomain),
+        webReaderLink: accessInfo.webReaderLink ?? '',
+        rawMarc: JSON.stringify(rawMarc).slice(0, 5000),
+        source: 'Google Books',
+      };
+    });
+}
+
 async function searchVietnameseBooks(searchType: string, query: string): Promise<object[]> {
   const cacheKey = `${searchType}:${query.toLowerCase().trim()}`;
   const cached = gbCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < GB_CACHE_TTL) return cached.result;
 
-  if (ai) {
-    const result = await searchWithGemini(searchType, query);
-    if (result.length > 0) {
-      gbCache.set(cacheKey, { ts: Date.now(), result });
-      return result;
-    }
+  const result = await searchGoogleBooks(searchType, query);
+  if (result.length > 0) {
+    gbCache.set(cacheKey, { ts: Date.now(), result });
+    return result;
   }
 
-  // Fallback: Google Books API
-  const fieldMap: Record<string, string> = { title: 'intitle', author: 'inauthor', isbn: 'isbn', keyword: '' };
-  const field   = fieldMap[searchType] ?? '';
-  const gbQuery = field ? `${field}:${query}` : query;
-  const langRestrict = (searchType === 'keyword' || searchType === 'title') ? '&langRestrict=vi' : '';
-  const apiKey  = process.env.GOOGLE_BOOKS_API_KEY?.trim();
-  const keyParam = apiKey ? `&key=${apiKey}` : '';
-  const gbUrl   = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(gbQuery)}${langRestrict}&maxResults=20&printType=books${keyParam}`;
+  const fallback = ai ? await searchWithGemini(searchType, query) : [];
 
-  console.log(`[GB] URL: ${gbUrl.replace(apiKey ?? '', apiKey ? '***KEY***' : '')}`);
-  const data = await fetchWithRetry(gbUrl);
-  console.log(`[GB] totalItems=${data.totalItems ?? 0}, items=${(data.items ?? []).length}, error=${JSON.stringify(data.error ?? null)}`);
-  if (data.error) throw new Error(`Google Books API lỗi: ${data.error.message ?? JSON.stringify(data.error)}`);
-
-  const items: any[] = data.items ?? [];
-  const result = items.map((item: any, i: number) => {
-    const vi = item.volumeInfo ?? {};
-    const isbn13 = (vi.industryIdentifiers ?? []).find((x: any) => x.type === 'ISBN_13')?.identifier ?? '';
-    const isbn10 = (vi.industryIdentifiers ?? []).find((x: any) => x.type === 'ISBN_10')?.identifier ?? '';
-    const isbn    = isbn13 || isbn10;
-    const authors = (vi.authors ?? []).join('; ');
-    const year    = (vi.publishedDate ?? '').slice(0, 4);
-    const language = vi.language === 'vi' ? 'vie' : (vi.language ?? '');
-    const subjects = (vi.categories ?? []).slice(0, 6);
-    const pageCount = vi.pageCount ? String(vi.pageCount) : '';
-    return {
-      id:         `gb_${item.id}_${i}`,
-      title:      vi.title     ?? '',
-      author:     authors,
-      year,
-      isbn,
-      publisher:  vi.publisher ?? '',
-      ddc:        '',
-      language,
-      physical:   '',
-      pageCount,
-      dimensions: '',
-      summary:    vi.description ? vi.description.slice(0, 400) : '',
-      subjects,
-      rawMarc:    JSON.stringify(vi).slice(0, 500),
-      source:     `Google Books — ${vi.publisher ?? 'NLV/Việt Nam'}`,
-    };
-  });
-
-  gbCache.set(cacheKey, { ts: Date.now(), result });
-  return result;
+  gbCache.set(cacheKey, { ts: Date.now(), result: fallback });
+  return fallback;
 }
 
 const SEARCH_PROMPT = (searchType: string, query: string) => `
@@ -666,6 +1038,7 @@ Từ khóa: "${query}"
 
 Dùng Google Search để tìm kiếm, ưu tiên sách tiếng Việt, sách xuất bản tại Việt Nam.
 Tìm tối đa 10 cuốn sách phù hợp nhất.
+Riêng trường DDC: chỉ điền nếu nguồn tìm được hiển thị rõ DDC/082. Nếu không chắc chắn, để chuỗi rỗng. Không suy đoán DDC theo thể loại.
 
 Trả về DUY NHẤT một JSON hợp lệ theo định dạng sau, KHÔNG thêm văn bản hay markdown:
 {
@@ -676,7 +1049,7 @@ Trả về DUY NHẤT một JSON hợp lệ theo định dạng sau, KHÔNG thê
       "year": "2024",
       "publisher": "Nhà xuất bản",
       "isbn": "ISBN nếu có",
-      "ddc": "Phân loại DDC nếu biết",
+      "ddc": "Phân loại DDC nếu nguồn hiển thị rõ, nếu không để rỗng",
       "language": "vie",
       "pageCount": "Số trang nếu biết",
       "dimensions": "Khổ sách nếu biết",
@@ -723,7 +1096,7 @@ async function searchWithGemini(searchType: string, query: string): Promise<obje
   }
 }
 
-/*LOC SRU — Library of Congress qua HTTP (không cần Z39.50 TCP)*/
+/*LOC SRU — Library of Congress LCDB/Folio qua HTTPS (không cần Z39.50 TCP)*/
 
 // GET /api/catalog/search-loc?searchType=title|author|isbn|keyword&query=...
 app.get('/api/catalog/search-loc', async (req: Request, res: Response) => {
@@ -735,33 +1108,66 @@ app.get('/api/catalog/search-loc', async (req: Request, res: Response) => {
     title:   'dc.title',
     author:  'dc.creator',
     isbn:    'bath.isbn',
-    keyword: 'anywhere',
+    keyword: 'cql.anywhere',
   };
-  const cqlIndex = indexMap[searchType] ?? 'anywhere';
-  // Dùng "=" exact word match. Thêm "vi" vào author search cho sách VN
-  const cleanQ = query.trim().replace(/"/g, '');
+  const cqlIndex = indexMap[searchType] ?? 'cql.anywhere';
+  // LOC LCDB/Folio hỗ trợ SRU/CQL. Với ISBN, LOC khuyến nghị bỏ dấu gạch nối.
+  const cleanQ = searchType === 'isbn'
+    ? query.replace(/[^0-9Xx]/g, '')
+    : query.trim().replace(/"/g, '');
   const cqlQuery = `${cqlIndex} = "${cleanQ}"`;
 
   try {
-    // LOC SRU dùng HTTP (không phải HTTPS) trên port 7090
-    const sruUrl = `http://z3950.loc.gov:7090/voyager?version=1.1&operation=searchRetrieve&recordSchema=marcxml&maximumRecords=15&query=${encodeURIComponent(cqlQuery)}`;
-
-    const xmlRes = await fetch(sruUrl, {
-      headers: { 'Accept': 'application/xml, text/xml' },
-      signal: AbortSignal.timeout(20000),
-    });
-
-    if (!xmlRes.ok) throw new Error(`LOC SRU trả về HTTP ${xmlRes.status}`);
-    const xml = await xmlRes.text();
+    const xml = await fetchLocSruXml(cqlQuery);
 
     const records = parseLocSruXml(xml);
-    res.json({ records, total: records.length, source: 'z3950.loc.gov (SRU)' });
+    const total = parseSruNumberOfRecords(xml) || records.length;
+    res.json({ records, total, returned: records.length, source: 'Library of Congress LCDB/Folio (SRU)' });
 
   } catch (err: any) {
     console.error('GET /api/catalog/search-loc', err.message);
-    res.status(502).json({ error: `Lỗi kết nối LOC SRU: ${err.message}` });
+    res.status(503).json({
+      error: 'Thư viện Quốc hội Mỹ đang phản hồi chậm hoặc tạm thời lỗi. Vui lòng thử lại sau, hoặc tìm bằng ISBN/nhan đề tiếng Anh ngắn hơn.',
+      detail: err.message,
+    });
   }
 });
+
+async function fetchLocSruXml(cqlQuery: string): Promise<string> {
+  let lastError: Error | null = null;
+
+  for (const baseUrl of LOC_SRU_BASE_URLS) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const params = new URLSearchParams({
+        version: '1.1',
+        operation: 'searchRetrieve',
+        recordSchema: 'marcxml',
+        maximumRecords: String(LOC_SRU_MAX_RECORDS),
+        query: cqlQuery,
+      });
+      const sruUrl = `${baseUrl}?${params.toString()}`;
+
+      try {
+        const xmlRes = await fetch(sruUrl, {
+          headers: { 'Accept': 'application/xml, text/xml' },
+          signal: AbortSignal.timeout(LOC_SRU_TIMEOUT_MS),
+        });
+
+        if (!xmlRes.ok) {
+          throw new Error(`${baseUrl} trả về HTTP ${xmlRes.status}`);
+        }
+
+        return await xmlRes.text();
+      } catch (err: any) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        console.warn(`LOC SRU retry ${attempt + 1}/2 failed: ${lastError.message}`);
+        if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 800));
+      }
+    }
+  }
+
+  throw lastError ?? new Error('Không thể kết nối LOC SRU');
+}
 
 /** Decode XML numeric entities → real Unicode (vd: &#x1EA1; → ạ) */
 function decodeXmlEntities(s: string): string {
@@ -770,6 +1176,11 @@ function decodeXmlEntities(s: string): string {
     .replace(/&#(\d+);/g,            (_m: string, d: string) => String.fromCodePoint(parseInt(d, 10)))
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+}
+
+function parseSruNumberOfRecords(xml: string): number {
+  const match = xml.match(/<(?:[a-z]+:)?numberOfRecords>(\d+)<\/(?:[a-z]+:)?numberOfRecords>/i);
+  return match ? Number(match[1]) : 0;
 }
 
 /** Parse MARCXML từ LOC SRU response */
@@ -844,10 +1255,6 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 
 /*STARTUP*/
 export async function startServer(): Promise<void> {
-  if (!DEMO_MODE) {
-    await initDb();
-  }
-
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
