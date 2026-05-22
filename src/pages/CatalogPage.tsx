@@ -15,10 +15,12 @@ import {
   Layers,
   Loader2,
   Pencil,
+  Plus,
   RefreshCw,
   Save,
   Search,
   Tag,
+  Trash2,
   X,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -317,6 +319,41 @@ function subjectErrors(subjects: string[]): string[] {
   });
 }
 
+function isControlMarcField(tag: string): boolean {
+  return /^00\d$/.test(tag.trim());
+}
+
+function normalizeMarcField(field: MarcField): MarcField {
+  const tag = field.tag.trim();
+  if (isControlMarcField(tag)) {
+    const value = field.value ?? field.raw ?? '';
+    return { tag, value, raw: value };
+  }
+
+  const ind1 = field.ind1?.slice(0, 1) || ' ';
+  const ind2 = field.ind2?.slice(0, 1) || ' ';
+  const subfields = (field.subfields ?? [])
+    .map(subfield => ({
+      code: subfield.code.trim().slice(0, 1),
+      value: subfield.value,
+    }))
+    .filter(subfield => subfield.code && subfield.value.trim());
+
+  return {
+    tag,
+    ind1,
+    ind2,
+    subfields,
+    raw: `${ind1}${ind2}${subfields.map(subfield => `\x1f${subfield.code}${subfield.value}`).join('')}`,
+  };
+}
+
+function normalizeMarcFields(fields?: MarcField[]): MarcField[] {
+  return (fields ?? [])
+    .map(normalizeMarcField)
+    .filter(field => /^\d{3}$/.test(field.tag));
+}
+
 interface EditImportModalProps {
   record: MarcRecord;
   onClose: () => void;
@@ -324,8 +361,196 @@ interface EditImportModalProps {
   saving: boolean;
 }
 
+function MarcFieldsEditor({
+  leader,
+  fields,
+  onLeaderChange,
+  onFieldsChange,
+}: {
+  leader?: string;
+  fields: MarcField[];
+  onLeaderChange: (value: string) => void;
+  onFieldsChange: (fields: MarcField[]) => void;
+}) {
+  const updateField = (fieldIndex: number, patch: Partial<MarcField>) => {
+    onFieldsChange(fields.map((field, index) => (
+      index === fieldIndex ? { ...field, ...patch } : field
+    )));
+  };
+
+  const updateSubfield = (fieldIndex: number, subfieldIndex: number, patch: Partial<MarcSubfield>) => {
+    onFieldsChange(fields.map((field, index) => {
+      if (index !== fieldIndex) return field;
+      const subfields = [...(field.subfields ?? [])];
+      subfields[subfieldIndex] = { ...subfields[subfieldIndex], ...patch };
+      return { ...field, subfields };
+    }));
+  };
+
+  const addField = () => {
+    onFieldsChange([
+      ...fields,
+      { tag: '500', ind1: ' ', ind2: ' ', subfields: [{ code: 'a', value: '' }], raw: '' },
+    ]);
+  };
+
+  const removeField = (fieldIndex: number) => {
+    onFieldsChange(fields.filter((_field, index) => index !== fieldIndex));
+  };
+
+  const addSubfield = (fieldIndex: number) => {
+    onFieldsChange(fields.map((field, index) => (
+      index === fieldIndex
+        ? { ...field, subfields: [...(field.subfields ?? []), { code: 'a', value: '' }] }
+        : field
+    )));
+  };
+
+  const removeSubfield = (fieldIndex: number, subfieldIndex: number) => {
+    onFieldsChange(fields.map((field, index) => (
+      index === fieldIndex
+        ? { ...field, subfields: (field.subfields ?? []).filter((_subfield, subIndex) => subIndex !== subfieldIndex) }
+        : field
+    )));
+  };
+
+  return (
+    <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold text-neutral-700">Tất cả trường MARC21 gốc</div>
+          <div className="text-[11px] text-neutral-400">Sửa trực tiếp leader, tag, indicator và subfield trước khi import.</div>
+        </div>
+        <button
+          type="button"
+          onClick={addField}
+          className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-white px-2.5 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Thêm field
+        </button>
+      </div>
+
+      <div className="mb-3 flex flex-col gap-1">
+        <label className="text-xs font-medium text-neutral-500">Leader</label>
+        <input
+          type="text"
+          value={leader ?? ''}
+          onChange={event => onLeaderChange(event.target.value)}
+          className="rounded-lg border border-neutral-200 bg-white px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+
+      <div className="max-h-96 space-y-3 overflow-y-auto pr-1">
+        {fields.length === 0 && (
+          <div className="rounded-lg border border-dashed border-neutral-200 bg-white px-3 py-4 text-center text-xs text-neutral-400">
+            Chưa có trường MARC21 gốc.
+          </div>
+        )}
+
+        {fields.map((field, fieldIndex) => {
+          const isControl = isControlMarcField(field.tag);
+          return (
+            <div key={`${field.tag}-${fieldIndex}`} className="rounded-lg border border-neutral-200 bg-white p-3">
+              <div className="mb-2 grid grid-cols-[72px_40px_40px_1fr_auto] gap-2">
+                <input
+                  type="text"
+                  value={field.tag}
+                  maxLength={3}
+                  onChange={event => updateField(fieldIndex, { tag: event.target.value.replace(/\D/g, '').slice(0, 3) })}
+                  className="rounded-md border border-neutral-200 px-2 py-1.5 font-mono text-xs font-semibold text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  aria-label="MARC tag"
+                />
+                <input
+                  type="text"
+                  value={isControl ? '' : (field.ind1 ?? ' ')}
+                  maxLength={1}
+                  disabled={isControl}
+                  onChange={event => updateField(fieldIndex, { ind1: event.target.value.slice(0, 1) || ' ' })}
+                  className="rounded-md border border-neutral-200 px-2 py-1.5 text-center font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-neutral-100"
+                  aria-label="Indicator 1"
+                />
+                <input
+                  type="text"
+                  value={isControl ? '' : (field.ind2 ?? ' ')}
+                  maxLength={1}
+                  disabled={isControl}
+                  onChange={event => updateField(fieldIndex, { ind2: event.target.value.slice(0, 1) || ' ' })}
+                  className="rounded-md border border-neutral-200 px-2 py-1.5 text-center font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-neutral-100"
+                  aria-label="Indicator 2"
+                />
+                <div className="min-w-0 text-[11px] text-neutral-400">
+                  {isControl ? 'Control field' : `${field.subfields?.length ?? 0} subfield`}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeField(fieldIndex)}
+                  className="rounded-md p-1.5 text-neutral-300 hover:bg-red-50 hover:text-red-500"
+                  aria-label="Xóa field"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              {isControl ? (
+                <textarea
+                  rows={2}
+                  value={field.value ?? field.raw ?? ''}
+                  onChange={event => updateField(fieldIndex, { value: event.target.value, raw: event.target.value })}
+                  className="w-full resize-none rounded-md border border-neutral-200 px-2 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              ) : (
+                <div className="space-y-2">
+                  {(field.subfields ?? []).map((subfield, subfieldIndex) => (
+                    <div key={`${subfield.code}-${subfieldIndex}`} className="grid grid-cols-[40px_1fr_auto] gap-2">
+                      <input
+                        type="text"
+                        value={subfield.code}
+                        maxLength={1}
+                        onChange={event => updateSubfield(fieldIndex, subfieldIndex, { code: event.target.value.slice(0, 1) })}
+                        className="rounded-md border border-neutral-200 px-2 py-1.5 text-center font-mono text-xs text-neutral-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        aria-label="Subfield code"
+                      />
+                      <input
+                        type="text"
+                        value={subfield.value}
+                        onChange={event => updateSubfield(fieldIndex, subfieldIndex, { value: event.target.value })}
+                        className="min-w-0 rounded-md border border-neutral-200 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        aria-label="Subfield value"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeSubfield(fieldIndex, subfieldIndex)}
+                        className="rounded-md p-1.5 text-neutral-300 hover:bg-red-50 hover:text-red-500"
+                        aria-label="Xóa subfield"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => addSubfield(fieldIndex)}
+                    className="inline-flex items-center gap-1 rounded-md border border-neutral-200 px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-50"
+                  >
+                    <Plus className="h-3 w-3" />
+                    Thêm subfield
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function EditImportModal({ record, onClose, onSave, saving }: EditImportModalProps) {
-  const [draft, setDraft] = useState<MarcRecord>({ ...record });
+  const [draft, setDraft] = useState<MarcRecord>({
+    ...record,
+    marcFields: normalizeMarcFields(record.marcFields),
+  });
   const [subjectInput, setSubjectInput] = useState((record.subjects ?? []).join('\n'));
   const [triedSave, setTriedSave] = useState(false);
 
@@ -356,7 +581,11 @@ function EditImportModal({ record, onClose, onSave, saving }: EditImportModalPro
 
   const handleSaveClick = () => {
     setTriedSave(true);
-    if (canSave) onSave(draft);
+    if (!canSave) return;
+    onSave({
+      ...draft,
+      marcFields: normalizeMarcFields(draft.marcFields),
+    });
   };
 
   const Field = ({
@@ -496,6 +725,13 @@ function EditImportModal({ record, onClose, onSave, saving }: EditImportModalPro
               </div>
             )}
           </div>
+
+          <MarcFieldsEditor
+            leader={draft.marcLeader}
+            fields={draft.marcFields ?? []}
+            onLeaderChange={value => setDraft(current => ({ ...current, marcLeader: value }))}
+            onFieldsChange={fields => setDraft(current => ({ ...current, marcFields: fields }))}
+          />
         </div>
 
         <div className="flex items-center justify-between gap-2 border-t border-neutral-100 px-5 py-4">

@@ -31,17 +31,6 @@ function Badge({ children, color = 'neutral' }: { children: React.ReactNode; col
   );
 }
 
-function MappedMarcField({ tag, label, value }: { tag: string; label: string; value?: string | null }) {
-  if (!value) return null;
-  return (
-    <div className="flex gap-2 text-xs">
-      <span className="font-mono font-bold text-blue-600 w-8 flex-shrink-0">{tag}</span>
-      <span className="text-neutral-500 flex-shrink-0">{label}:</span>
-      <span className="text-neutral-700 break-words">{value}</span>
-    </div>
-  );
-}
-
 function getMarcFields(value: unknown): MarcFieldType[] {
   if (Array.isArray(value)) return value as MarcFieldType[];
   if (typeof value === 'string') {
@@ -247,48 +236,11 @@ function BookCard({ book: raw, onDelete }: { book: any; onDelete: (id: number) =
 
         {/* ── Chi tiết MARC ── */}
         {expanded && (
-          <div className="mt-3 bg-neutral-50 border border-neutral-200 rounded-lg p-4 space-y-2">
-            <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-400 mb-3">
-              MARC21 Fields
-            </div>
-            <MappedMarcField tag="245" label="Nhan đề"         value={book.title} />
-            <MappedMarcField tag="245" label="Phụ đề"          value={book.subtitle} />
-            <MappedMarcField tag="100" label="Tác giả"         value={book.author} />
-            <MappedMarcField tag="020" label="ISBN"            value={book.isbn} />
-            <MappedMarcField tag="020" label="ISBN-10"         value={book.isbn10} />
-            <MappedMarcField tag="041" label="Ngôn ngữ"        value={book.language} />
-            <MappedMarcField tag="082" label="DDC"             value={book.ddc} />
-            <MappedMarcField tag="260" label="Năm xuất bản"    value={book.publishYear?.toString()} />
-            <MappedMarcField tag="260" label="Nhà xuất bản"    value={book.publisher} />
-            <MappedMarcField tag="300" label="Mô tả vật lý"    value={book.physical || [book.pageCount ? book.pageCount + ' trang' : '', book.dimensions].filter(Boolean).join('; ')} />
-            <MappedMarcField tag="500" label="Danh mục chính"  value={book.mainCategory} />
-            <MappedMarcField tag="856" label="Link nguồn" value={book.infoLink || book.canonicalVolumeLink} />
-            {subjectsArr.length > 0 && (
-              <div className="flex gap-2 text-xs">
-                <span className="font-mono font-bold text-blue-600 w-8 flex-shrink-0">650</span>
-                <span className="text-neutral-500 flex-shrink-0">Chủ đề:</span>
-                <span className="text-neutral-700">{subjectsArr.join(' | ')}</span>
-              </div>
-            )}
-            {book.summary && (
-              <div className="pt-2 border-t border-neutral-200">
-                <div className="flex gap-2 text-xs mb-1">
-                  <span className="font-mono font-bold text-blue-600 w-8">520</span>
-                  <span className="text-neutral-500">Tóm tắt:</span>
-                </div>
-                <p className="text-xs text-neutral-600 ml-10 leading-relaxed whitespace-pre-wrap">{book.summary}</p>
-              </div>
-            )}
-            {book.toc && (
-              <div className="pt-2 border-t border-neutral-200">
-                <div className="flex gap-2 text-xs mb-1">
-                  <span className="font-mono font-bold text-blue-600 w-8">505</span>
-                  <span className="text-neutral-500">Mục lục:</span>
-                </div>
-                <p className="text-xs text-neutral-600 ml-10 leading-relaxed whitespace-pre-wrap">{book.toc}</p>
-              </div>
-            )}
+          <div className="mt-3 bg-neutral-50 border border-neutral-200 rounded-lg p-4">
             <FullMarcFields leader={book.marcLeader} fields={marcFields} />
+            {!book.marcLeader && marcFields.length === 0 && (
+              <p className="text-xs text-neutral-400">Chưa có trường MARC21 gốc.</p>
+            )}
           </div>
         )}
       </div>
