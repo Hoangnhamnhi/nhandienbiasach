@@ -77,6 +77,13 @@ export default function ScannerPage() {
       }
       if (!res.ok) throw new Error(data.error || 'Lỗi không xác định');
 
+      const pageCount = data.pageCount ? String(data.pageCount) : '';
+      const dimensions = data.dimensions || '';
+      const physical = data.physical || [
+        pageCount ? `${pageCount} trang` : '',
+        dimensions,
+      ].filter(Boolean).join('; ');
+
       setExtractedData({
         title: data.title || '',
         author: data.author || '',
@@ -86,11 +93,11 @@ export default function ScannerPage() {
         isbn: data.isbn || '',
         ddc: data.ddc || '',
         language: data.language || '',
-        physical: data.physical || '',
-        pageCount: data.pageCount || '',
-        dimensions: data.dimensions || '',
+        physical,
+        pageCount,
+        dimensions,
         summary: data.summary || '',
-        subjects: data.subjects || [],
+        subjects: Array.isArray(data.subjects) ? data.subjects : [],
         rawOcrText: data.rawOcrText,
       });
       // Sau khi trích xuất xong → ở chế độ xem, chưa cho chỉnh sửa
@@ -100,6 +107,14 @@ export default function ScannerPage() {
     } finally {
       setIsExtracting(false);
     }
+  };
+
+  const physicalDescription = (data: ExtractedData): string => {
+    if (data.physical?.trim()) return data.physical.trim();
+    return [
+      data.pageCount ? `${data.pageCount} trang` : '',
+      data.dimensions,
+    ].filter(Boolean).join('; ');
   };
 
   const handleSave = async () => {
@@ -149,11 +164,13 @@ export default function ScannerPage() {
 
   // Component hiển thị thông tin (chế độ xem)
   const ViewField = ({ label, value }: { label: string; value?: string | null }) => {
-    if (!value) return null;
+    const displayValue = String(value ?? '').trim();
     return (
       <div className="space-y-0.5">
         <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide">{label}</p>
-        <p className="text-sm text-neutral-800 leading-relaxed">{value}</p>
+        <p className="text-sm text-neutral-800 leading-relaxed">
+          {displayValue || <span className="italic text-neutral-400">Chưa có dữ liệu</span>}
+        </p>
       </div>
     );
   };
@@ -167,7 +184,7 @@ export default function ScannerPage() {
     label: string;
     value?: string | number | null;
   }) => {
-    if (!value) return null;
+    const displayValue = String(value ?? '').trim();
     return (
       <div className="flex items-start gap-3 rounded-xl border border-neutral-100 bg-white px-3 py-3 shadow-sm">
         <span className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-neutral-50 text-neutral-500">
@@ -175,7 +192,9 @@ export default function ScannerPage() {
         </span>
         <div className="min-w-0">
           <p className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">{label}</p>
-          <p className="mt-0.5 break-words text-sm font-medium text-neutral-800">{value}</p>
+          <p className="mt-0.5 break-words text-sm font-medium text-neutral-800">
+            {displayValue || <span className="italic text-neutral-400">Chưa có dữ liệu</span>}
+          </p>
         </div>
       </div>
     );
@@ -348,20 +367,21 @@ export default function ScannerPage() {
 
             <div className="space-y-4 p-5 sm:p-6">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <SavedInfoItem icon={<Hash className="h-4 w-4" />} label="ISBN" value={extractedData.isbn} />
-                <SavedInfoItem icon={<BookOpen className="h-4 w-4" />} label="DDC" value={extractedData.ddc} />
-                <SavedInfoItem icon={<MapPin className="h-4 w-4" />} label="Nơi sản xuất" value={extractedData.productionPlace} />
-                <SavedInfoItem icon={<Building2 className="h-4 w-4" />} label="Nhà xuất bản" value={extractedData.publisher} />
-                <SavedInfoItem icon={<Calendar className="h-4 w-4" />} label="Năm xuất bản" value={extractedData.year} />
-                <SavedInfoItem icon={<Languages className="h-4 w-4" />} label="Ngôn ngữ" value={extractedData.language} />
+                <SavedInfoItem icon={<Hash className="h-4 w-4" />} label="ISBN (020)" value={extractedData.isbn} />
+                <SavedInfoItem icon={<BookOpen className="h-4 w-4" />} label="DDC (082)" value={extractedData.ddc} />
+                <SavedInfoItem icon={<MapPin className="h-4 w-4" />} label="Nơi sản xuất (260$a)" value={extractedData.productionPlace} />
+                <SavedInfoItem icon={<Building2 className="h-4 w-4" />} label="Nhà xuất bản (260$b)" value={extractedData.publisher} />
+                <SavedInfoItem icon={<Calendar className="h-4 w-4" />} label="Năm XB (260$c)" value={extractedData.year} />
+                <SavedInfoItem icon={<Languages className="h-4 w-4" />} label="Ngôn ngữ (041)" value={extractedData.language} />
+                <SavedInfoItem icon={<FileText className="h-4 w-4" />} label="Mô tả vật lý (300)" value={physicalDescription(extractedData)} />
               </div>
 
-              {extractedData.subjects && extractedData.subjects.length > 0 && (
-                <div className="rounded-2xl border border-neutral-100 bg-white p-4 shadow-sm">
-                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-                    <Tag className="h-3.5 w-3.5" />
-                    Chủ đề
-                  </div>
+              <div className="rounded-2xl border border-neutral-100 bg-white p-4 shadow-sm">
+                <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+                  <Tag className="h-3.5 w-3.5" />
+                  Chủ đề (650)
+                </div>
+                {extractedData.subjects && extractedData.subjects.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5">
                     {extractedData.subjects.map((subject, index) => (
                       <span key={`${subject}-${index}`} className="rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
@@ -369,18 +389,20 @@ export default function ScannerPage() {
                       </span>
                     ))}
                   </div>
-                </div>
-              )}
+                ) : (
+                  <p className="text-sm italic text-neutral-400">Chưa có dữ liệu</p>
+                )}
+              </div>
 
-              {extractedData.summary && (
-                <div className="rounded-2xl border border-neutral-100 bg-white p-4 shadow-sm">
-                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-                    <FileText className="h-3.5 w-3.5" />
-                    Tóm tắt
-                  </div>
-                  <p className="text-sm leading-relaxed text-neutral-700 whitespace-pre-wrap">{extractedData.summary}</p>
+              <div className="rounded-2xl border border-neutral-100 bg-white p-4 shadow-sm">
+                <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+                  <FileText className="h-3.5 w-3.5" />
+                  Tóm tắt (520)
                 </div>
-              )}
+                <p className="text-sm leading-relaxed text-neutral-700 whitespace-pre-wrap">
+                  {extractedData.summary || <span className="italic text-neutral-400">Chưa có dữ liệu</span>}
+                </p>
+              </div>
             </div>
           </div>
         )}
@@ -398,23 +420,25 @@ export default function ScannerPage() {
               <ViewField label="Năm XB (260$c)" value={extractedData.year} />
               <ViewField label="Phân loại DDC (082) (Tham khảo)" value={extractedData.ddc} />
               <ViewField label="Ngôn ngữ (041)" value={extractedData.language} />
-              <ViewField label="Mô tả vật lý (300)" value={[extractedData.pageCount ? extractedData.pageCount + ' trang' : '', extractedData.dimensions].filter(Boolean).join('; ')} />
-              {extractedData?.subjects && extractedData.subjects.length > 0 && (
-                <div className="sm:col-span-2 space-y-0.5">
-                  <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide">Chủ đề (650)</p>
+              <ViewField label="Mô tả vật lý (300)" value={physicalDescription(extractedData)} />
+              <div className="sm:col-span-2 space-y-0.5">
+                <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide">Chủ đề (650)</p>
+                {extractedData?.subjects && extractedData.subjects.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5 mt-1">
                     {extractedData.subjects.map((s, i) => (
                       <span key={i} className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full border border-blue-100">{s}</span>
                     ))}
                   </div>
-                </div>
-              )}
-              {extractedData.summary && (
-                <div className="sm:col-span-2 space-y-0.5">
-                  <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide">Tóm tắt (520)</p>
-                  <p className="text-sm text-neutral-700 leading-relaxed whitespace-pre-wrap">{extractedData.summary}</p>
-                </div>
-              )}
+                ) : (
+                  <p className="text-sm italic text-neutral-400">Chưa có dữ liệu</p>
+                )}
+              </div>
+              <div className="sm:col-span-2 space-y-0.5">
+                <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide">Tóm tắt (520)</p>
+                <p className="text-sm text-neutral-700 leading-relaxed whitespace-pre-wrap">
+                  {extractedData.summary || <span className="italic text-neutral-400">Chưa có dữ liệu</span>}
+                </p>
+              </div>
             </div>
           </div>
         )}
