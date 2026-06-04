@@ -71,7 +71,7 @@ Bạn là CHUYÊN GIA THƯ VIỆN HỌC. Nhiệm vụ:
 1. Nhận diện hình ảnh sách (bìa trước, bìa sau, mục lục, trang bản quyền...).
 2. Đọc kỹ để lấy tóm tắt, mục lục và thông tin xuất bản.
    - Nếu ảnh chỉ có mục lục hoặc nội dung (không có bìa), dùng Google Search để xác định tên sách và tác giả.
-3. Dùng Google Search để bổ sung thêm thông tin còn thiếu (ISBN, số trang, nhà xuất bản...).
+3. Dùng Google Search để bổ sung thêm thông tin còn thiếu (ISBN, số trang, nhà xuất bản, nơi sản xuất...).
    - Riêng DDC (082): CHỈ điền khi nhìn thấy trực tiếp trên ảnh, trang bản quyền/CIP, gáy nhãn thư viện, hoặc tìm được trong bản ghi thư mục đáng tin cậy có trường DDC/082.
    - KHÔNG suy đoán DDC theo thể loại, tên sách, tác giả hoặc chủ đề. Nếu không có nguồn rõ ràng, để "ddc": "".
    - Không dùng một mã DDC mặc định/lặp lại cho nhiều sách. Sách văn học, thiếu nhi, kỹ năng... có thể cùng lớp rộng nhưng vẫn không được tự gán nếu thiếu nguồn.
@@ -79,11 +79,13 @@ Bạn là CHUYÊN GIA THƯ VIỆN HỌC. Nhiệm vụ:
 [YÊU CẦU BẮT BUỘC]
 - Trả về DUY NHẤT một JSON hợp lệ. KHÔNG thêm văn bản, giải thích hay markdown bên ngoài.
 - Trường thiếu để chuỗi rỗng "".
+- Hai trường "summary" và "subjects" phải chỉ viết bằng tiếng Việt. Nếu nguồn là tiếng Anh hoặc ngôn ngữ khác, hãy dịch sang tiếng Việt.
 
 {
   "title": "Tên sách (245)",
   "author": "Tác giả (100)",
   "year": 2024,
+  "productionPlace": "Nơi sản xuất / nơi xuất bản (260$a)",
   "publisher": "Nhà xuất bản",
   "isbn": "ISBN",
   "ddc": "Phân loại DDC nếu có nguồn rõ ràng, nếu không để chuỗi rỗng",
@@ -91,9 +93,9 @@ Bạn là CHUYÊN GIA THƯ VIỆN HỌC. Nhiệm vụ:
   "physical": "Mô tả vật lý",
   "pageCount": "Số trang",
   "dimensions": "Khổ sách",
-  "summary": "Tóm tắt nội dung",
+  "summary": "Tóm tắt nội dung bằng tiếng Việt",
   "toc": "Mục lục (nếu có)",
-  "subjects": ["Chủ đề 1", "Chủ đề 2"]
+  "subjects": ["Chủ đề tiếng Việt 1", "Chủ đề tiếng Việt 2"]
 }
 `.trim();
 
@@ -208,7 +210,7 @@ app.get('/api/books', async (_req: Request, res: Response) => {
 // POST /api/books
 app.post('/api/books', async (req: Request, res: Response) => {
   const {
-    title, author, year, isbn, ddc, publisher,
+    title, author, year, isbn, ddc, publisher, productionPlace,
     language, physical, pageCount, dimensions,
     summary, toc, subjects, rawOcrText,
     rawMarc, marcLeader, marcFields,
@@ -229,6 +231,7 @@ app.post('/api/books', async (req: Request, res: Response) => {
     publishYear: year ? Number(year) : null,
     isbn: isbn || '',
     ddc: ddc || '',
+    productionPlace: productionPlace || '',
     publisher: publisher || '',
     language: language || '',
     physical: physicalText,

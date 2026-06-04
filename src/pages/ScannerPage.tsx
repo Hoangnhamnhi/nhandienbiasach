@@ -1,10 +1,30 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, BookOpen, Save, Loader2, X, Edit2, Eye, CheckCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import {
+  BookMarked,
+  BookOpen,
+  Building2,
+  Calendar,
+  CheckCircle,
+  Edit2,
+  Eye,
+  FileText,
+  Hash,
+  Languages,
+  Loader2,
+  MapPin,
+  RotateCcw,
+  Save,
+  Tag,
+  UploadCloud,
+  X,
+} from 'lucide-react';
 import { cn } from '../lib/utils';
 import { ExtractedData } from '../App';
 import { saveLocalBook } from '../lib/demo-books';
 
 export default function ScannerPage() {
+  const navigate = useNavigate();
   const [files, setFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);
@@ -61,6 +81,7 @@ export default function ScannerPage() {
         title: data.title || '',
         author: data.author || '',
         year: data.year ? String(data.year) : '',
+        productionPlace: data.productionPlace || '',
         publisher: data.publisher || '',
         isbn: data.isbn || '',
         ddc: data.ddc || '',
@@ -89,6 +110,7 @@ export default function ScannerPage() {
         title: extractedData.title,
         author: extractedData.author,
         year: extractedData.year ? parseInt(extractedData.year, 10) : null,
+        productionPlace: extractedData.productionPlace,
         publisher: extractedData.publisher,
         isbn: extractedData.isbn,
         ddc: extractedData.ddc,
@@ -132,6 +154,29 @@ export default function ScannerPage() {
       <div className="space-y-0.5">
         <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide">{label}</p>
         <p className="text-sm text-neutral-800 leading-relaxed">{value}</p>
+      </div>
+    );
+  };
+
+  const SavedInfoItem = ({
+    icon,
+    label,
+    value,
+  }: {
+    icon: React.ReactNode;
+    label: string;
+    value?: string | number | null;
+  }) => {
+    if (!value) return null;
+    return (
+      <div className="flex items-start gap-3 rounded-xl border border-neutral-100 bg-white px-3 py-3 shadow-sm">
+        <span className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-neutral-50 text-neutral-500">
+          {icon}
+        </span>
+        <div className="min-w-0">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">{label}</p>
+          <p className="mt-0.5 break-words text-sm font-medium text-neutral-800">{value}</p>
+        </div>
       </div>
     );
   };
@@ -256,22 +301,86 @@ export default function ScannerPage() {
 
         {/* Đã lưu thành công */}
         {savedId && extractedData && (
-          <div className="space-y-4">
-            <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl">
-              <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-              <div>
-                <p className="text-sm font-semibold text-emerald-800">Đã lưu vào thư viện (ID: #{savedId})</p>
-                <p className="text-xs text-emerald-600 mt-0.5">{extractedData.title}</p>
+          <div className="overflow-hidden rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-50 via-white to-blue-50 shadow-sm">
+            <div className="border-b border-white/70 p-5 sm:p-6">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 items-start gap-4">
+                  <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-sm shadow-emerald-600/20">
+                    <CheckCircle className="h-6 w-6" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="mb-1 flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-emerald-200 bg-white px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                        Đã lưu vào thư viện
+                      </span>
+                      <span className="rounded-full border border-neutral-200 bg-white px-2.5 py-1 font-mono text-xs text-neutral-500">
+                        ID #{savedId}
+                      </span>
+                    </div>
+                    <h3 className="break-words text-xl font-bold leading-snug text-neutral-900">
+                      {extractedData.title || 'Không có tiêu đề'}
+                    </h3>
+                    {(extractedData.author || extractedData.year) && (
+                      <p className="mt-1 text-sm text-neutral-500">
+                        {[extractedData.author, extractedData.year].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 sm:justify-end">
+                  <button
+                    onClick={resetAll}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-50"
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                    Quét sách mới
+                  </button>
+                  <button
+                    onClick={() => navigate('/library')}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-neutral-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-neutral-800"
+                  >
+                    <BookMarked className="h-4 w-4" />
+                    Xem trong thư viện
+                  </button>
+                </div>
               </div>
-              <button onClick={resetAll} className="ml-auto text-xs text-emerald-700 hover:underline font-medium">Quét sách mới</button>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-neutral-50 rounded-2xl border border-neutral-100">
-              <ViewField label="Tên sách (245)" value={extractedData.title} />
-              <ViewField label="Tác giả (100)" value={extractedData.author} />
-              <ViewField label="ISBN" value={extractedData.isbn} />
-              <ViewField label="Nhà xuất bản" value={extractedData.publisher} />
-              <ViewField label="Năm XB" value={extractedData.year} />
-              <ViewField label="DDC" value={extractedData.ddc} />
+
+            <div className="space-y-4 p-5 sm:p-6">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <SavedInfoItem icon={<Hash className="h-4 w-4" />} label="ISBN" value={extractedData.isbn} />
+                <SavedInfoItem icon={<BookOpen className="h-4 w-4" />} label="DDC" value={extractedData.ddc} />
+                <SavedInfoItem icon={<MapPin className="h-4 w-4" />} label="Nơi sản xuất" value={extractedData.productionPlace} />
+                <SavedInfoItem icon={<Building2 className="h-4 w-4" />} label="Nhà xuất bản" value={extractedData.publisher} />
+                <SavedInfoItem icon={<Calendar className="h-4 w-4" />} label="Năm xuất bản" value={extractedData.year} />
+                <SavedInfoItem icon={<Languages className="h-4 w-4" />} label="Ngôn ngữ" value={extractedData.language} />
+              </div>
+
+              {extractedData.subjects && extractedData.subjects.length > 0 && (
+                <div className="rounded-2xl border border-neutral-100 bg-white p-4 shadow-sm">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+                    <Tag className="h-3.5 w-3.5" />
+                    Chủ đề
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {extractedData.subjects.map((subject, index) => (
+                      <span key={`${subject}-${index}`} className="rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+                        {subject}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {extractedData.summary && (
+                <div className="rounded-2xl border border-neutral-100 bg-white p-4 shadow-sm">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+                    <FileText className="h-3.5 w-3.5" />
+                    Tóm tắt
+                  </div>
+                  <p className="text-sm leading-relaxed text-neutral-700 whitespace-pre-wrap">{extractedData.summary}</p>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -283,10 +392,11 @@ export default function ScannerPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 p-5 bg-neutral-50 rounded-2xl border border-neutral-100">
               <ViewField label="Tên sách (245)" value={extractedData.title} />
               <ViewField label="Tác giả (100)" value={extractedData.author} />
-              <ViewField label="ISBN (020)" value={extractedData.isbn} />
+              <ViewField label="ISBN (020) (Tham khảo)" value={extractedData.isbn} />
+              <ViewField label="Nơi sản xuất (260$a)" value={extractedData.productionPlace} />
               <ViewField label="Nhà xuất bản (260$b)" value={extractedData.publisher} />
               <ViewField label="Năm XB (260$c)" value={extractedData.year} />
-              <ViewField label="Phân loại DDC (082)" value={extractedData.ddc} />
+              <ViewField label="Phân loại DDC (082) (Tham khảo)" value={extractedData.ddc} />
               <ViewField label="Ngôn ngữ (041)" value={extractedData.language} />
               <ViewField label="Mô tả vật lý (300)" value={[extractedData.pageCount ? extractedData.pageCount + ' trang' : '', extractedData.dimensions].filter(Boolean).join('; ')} />
               {extractedData?.subjects && extractedData.subjects.length > 0 && (
@@ -328,6 +438,10 @@ export default function ScannerPage() {
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-neutral-700">ISBN (020)</label>
                 <input type="text" value={extractedData.isbn || ''} onChange={e => setExtractedData({...extractedData, isbn: e.target.value})} className="w-full px-3 py-2 border border-neutral-300 rounded-lg focus:ring-2 focus:ring-blue-600 outline-none" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-neutral-700">Nơi sản xuất (260$a)</label>
+                <input type="text" value={extractedData.productionPlace || ''} onChange={e => setExtractedData({...extractedData, productionPlace: e.target.value})} className="w-full px-3 py-2 border border-neutral-300 rounded-lg focus:ring-2 focus:ring-blue-600 outline-none" />
               </div>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-neutral-700">Nhà xuất bản (260$b)</label>

@@ -34,6 +34,7 @@ export function saveLocalBook(input: any, id?: number): any {
     publishYear: input.year ? Number(input.year) : (input.publishYear ?? null),
     isbn: input.isbn || '',
     ddc: input.ddc || '',
+    productionPlace: input.productionPlace || '',
     publisher: input.publisher || '',
     language: input.language || '',
     physical: input.physical || '',

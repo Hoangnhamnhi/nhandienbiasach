@@ -39,6 +39,7 @@ const BOOK_EXPORT_FIELDS: ExportField[] = [
   { header: 'Năm xuất bản', width: 90, getValue: book => book.publishYear },
   { header: 'ISBN (020)', width: 140, getValue: book => book.isbn },
   { header: 'DDC (082)', width: 95, getValue: book => book.ddc },
+  { header: 'Nơi sản xuất (260$a)', width: 160, getValue: book => book.productionPlace },
   { header: 'Nhà xuất bản', width: 180, getValue: book => book.publisher },
   { header: 'Ngôn ngữ (041)', width: 95, getValue: book => book.language },
   { header: 'Số trang', width: 85, getValue: book => book.pageCount },

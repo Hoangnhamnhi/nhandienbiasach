@@ -11,6 +11,7 @@ export interface ExtractedData {
   title: string | null;
   author: string | null;
   year: string | null;
+  productionPlace?: string | null;
   publisher?: string | null;
   isbn?: string | null;
   ddc?: string | null;
@@ -49,6 +50,7 @@ export interface SavedBook {
   isbn?: string;
   isbn10?: string;
   ddc?: string;
+  productionPlace?: string;
   publisher?: string;
   language?: string;
   physical?: string;
